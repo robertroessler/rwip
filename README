@@ -1,0 +1,85 @@
+RWip
+====
+The RWip (rwip) project was originally created to do one simple thing: restore
+the popular behavior of the built-in Windows screensaver "Bubbles.scr", lost in
+the transition to Windows 8.x (and later).
+
+Of course, "specialized" apps can seemingly demand generalization, so that led
+to the creation of a full, non-specific "inactivity proxy", that is able to wait
+for the user to become inactive for a specified period, and then run a chosen
+executable.
+
+Besides the described overt functionality, RWip also serves as an example of how
+simple a [GUI] Windows app can be... with nary a bulky framework, manifest file,
+or DLL in sight, one can create a functional piece of code with a pleasing and
+useful interface - that may be easily extended.
+
+It is written in fairly idiomatic modern C++ 11/14, and in addition to the main
+"inactivity" functionality, also includes "helper" templates and functions that
+can assist with Windows "handle" lifetime management, as well as aiding in the
+layout of windows and controls.
+
+Usage of RWip is simple:
+
+*	set any "official" Windows screen saver to the "(None)" entry - note that
+	RWip happily co-exists with any "turn off the screen" timeout you choose
+
+*	when first run, the presumed executable and parameter is set to
+
+	"c:\Windows\System32\Bubbles.scr /s"
+
+	...note the "/s" - this is part of the standard screensaver interface, and
+	is REQUIRED to make the screensaver run "normally"
+
+*	the initial "inactivity" interval is 10 minutes - this may be adjusted to
+	a desired value between [the minimum] 1 minute and [the maximum] 1 hour
+
+*	the specified executable will normally run with "restricted" rights and low
+	process integrity - if this proves inadequate for your chosen executable, it
+	can be changed to execute with the full credentials/capabilities of the user
+
+After the first run, your settings will be saved in the following "config" file:
+
+%USERPROFILE%\.rwipconfig
+
+(typically in the Windows per-user home directory @ C:\Users\<user-name>)
+
+Besides being "pure" C++, the code is believed to be both 32/64 -bit "safe", but
+do note that this is a Windows-only application... in fact, in addition to being
+"safe", pre-built executables are available with each release - for those eager
+to start using RWip without waiting to build it.
+
+More Details
+============
+
+The reason the much-liked "Bubbles.scr" screensaver lost a lot of its appeal in
+the transition to Windows 8.x is that - for security reasons - Windows started
+running screensavers in their own desktop "sessions", which means they typically
+start with a blank background... however, the most visually appealing feature of
+"Bubbles.scr" was that it appeared to float numerous translucent and colliding
+bubbles over the top of *your* desktop.
+
+By executing "Bubbles.scr" *not* as a screen saver per se, and just as a normal
+app, the old behavior of running "on top of" your desktop is now back.  RWip of
+course does monitor the screen "power state" and the user's "presence" to know
+when it should shut down the chosen executable (usually a screen saver) and in
+general get out of the way.
+
+ToDo
+====
+Possible items to work on - for myself or collaborators include
+
+* enable RWip to be yet another "always run on system start-up" app... sigh
+
+* a cool icon (of course)
+
+* one *could* limit the re-painting of the countdown display to ONLY the areas
+known to have changed, e.g., "59:59" -> 1 second earlier only requires painting
+a single digit... on the other hand, the entire app consumes ~1 sec per DAY
+
+ProbablyNot
+===========
+Things that most likely should NOT happen include
+
+* let's see - adding a script language interpreter for the "inactivity" function
+is probably a bit over the top
