@@ -46,7 +46,7 @@ After the first run, your settings will be saved in the following "config" file:
 
 Besides being "pure" C++, the code is believed to be both 32/64 -bit "safe", but
 do note that this is a Windows-only application... in fact, in addition to being
-"safe", pre-built executables are available with each release - for those eager
+"safe", pre-built executables are available with each **release** - for those eager
 to start using RWip without waiting to build it.
 
 More Details
