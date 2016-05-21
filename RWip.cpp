@@ -95,12 +95,14 @@ static const pair<wchar_t*, unsigned long> intervals[]{
 	{ L"45 minutes", 45 * 60 * 1000 },
 	{ L"1 hour", 60 * 60 * 1000 }
 };
+const int periodIdMax = sizeof intervals / sizeof intervals[0];
 
 static HWND executableH = NULL;
 static HFONT countdownF = NULL;
 static HWND countdownH = NULL;
 static HWND restrictedH = NULL;
 static HWND periodH = NULL;
+static WNDPROC oldListBoxProc = NULL;
 static int periodId = 4;
 
 static Win32Handle<HANDLE> timer{ NULL };
@@ -297,6 +299,26 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 }
 
 /*
+	A  special-purpose Windows "wndProc", or "Windows Procedure" - used solely
+	for interpreting mouse "wheel" messages in a sub-classed LISTBOX control in
+	a COMBOBOX... which are typically just discarded.
+*/
+static LRESULT CALLBACK listBoxWndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
+{
+	if (mId == WM_MOUSEWHEEL) {
+		const int dY = int(wp) >> 16;
+		periodId += dY < 0 ? 1 : dY > 0 ? -1 : 0;
+		if (periodId < 0)
+			periodId = 0;
+		else if (periodId >= periodIdMax)
+			periodId = periodIdMax - 1;
+		::SendMessage(periodH, CB_SETCURSEL, periodId, 0);
+		return 0;
+	}
+	return ::CallWindowProc(oldListBoxProc, w, mId, wp, lp); // (go with "default" processing)
+}
+
+/*
 	Create and initialize all of the supporting windows and controls, using both
 	"percent of" support and dynamic sizing in doing the detailed layout... this
 	will provide SOME amount of resiliency with respect to different window and
@@ -320,6 +342,10 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	for (const auto& p : intervals)
 		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)p.first);
 	::SendMessage(periodH, CB_SETCURSEL, periodId = 4, 0);
+
+	COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 };
+	if (::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)&cbI))
+		oldListBoxProc = (WNDPROC)::SetWindowLongPtr(cbI.hwndList, GWLP_WNDPROC, (LONG_PTR)listBoxWndProc);
 
 	restrictedH = ::CreateWindow(L"BUTTON",
 		L"RunAs restricted and low-integrity process",
