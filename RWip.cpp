@@ -95,7 +95,7 @@ static const pair<wchar_t*, unsigned long> intervals[]{
 	{ L"45 minutes", 45 * 60 * 1000 },
 	{ L"1 hour", 60 * 60 * 1000 }
 };
-const int periodIdMax = sizeof intervals / sizeof intervals[0];
+constexpr int periodIdMax = sizeof intervals / sizeof intervals[0];
 
 static HWND executableH = NULL;
 static HFONT countdownF = NULL;
@@ -112,9 +112,9 @@ static bool userPresent = true;
 static bool quitting = false;
 
 //	SCALED (x100) and ROUNDED % => pixels
-inline int pc2px(int w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 0.5e0 : -0.5e0)); }
+constexpr int pc2px(int w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 0.5e0 : -0.5e0)); }
 //	SCALED (x100) and ROUNDED pixels => %
-inline int px2pc(int w, int px) { return (int)(px * 10000e0 / w + 0.5e0); }
+constexpr int px2pc(int w, int px) { return (int)(px * 10000e0 / w + 0.5e0); }
 
 //	RECT helpers
 inline int widthOf(RECT& r) { return r.right - r.left; }
@@ -150,7 +150,7 @@ static wstring powerChange2string(const POWERBROADCAST_SETTING* pbs)
 	Format for display the older, non-POWERBROADCAST_SETTING param variant of a
 	WM_POWERBROADCAST message.
 */
-static wstring powerMsgOther2string(WPARAM wp)
+static const wchar_t* powerMsgOther2string(WPARAM wp)
 {
 	if (wp == PBT_APMSUSPEND)
 		return L"PBT_APMSUSPEND";
@@ -169,10 +169,9 @@ static wstring powerMsgOther2string(WPARAM wp)
 */
 static void formatTimeRemaining(wchar_t* buf, size_t n, DWORD dT)
 {
-	const int totalSeconds = dT / 1000;
-	const int fractions = dT % 1000;
-	const int minutes = totalSeconds / 60;
-	const int displaySeconds = totalSeconds % 60;
+	const int seconds = dT / 1000;
+	const int minutes = seconds / 60;
+	const int displaySeconds = seconds % 60;
 	swprintf(buf, n, L"%02d:%02d", minutes, displaySeconds);
 }
 
@@ -214,7 +213,7 @@ static bool runProcessAndWait(wchar_t* cmd, DWORD& exit)
 	trace((wstring(L"RUN INACTIVITY task => ") + cmd).c_str());
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
 	if (!::CreateProcess(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &startInfo, &procInfo))
-		return false;
+		return trace(L"*** FAILED CreateProcess"), false;
 	Win32Handle<HANDLE&> pH(procInfo.hProcess), tH(procInfo.hThread);
 	::WaitForSingleObject(procInfo.hProcess, INFINITE);
 	::GetExitCodeProcess(procInfo.hProcess, &exit);
@@ -249,7 +248,7 @@ static bool runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 	::LocalFree(tml.Label.Sid);
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
 	if (!::CreateProcessAsUser(restricted, NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &startInfo, &procInfo))
-		return trace(L"***FAILED CreateProcessAsUser"), false;
+		return trace(L"*** FAILED CreateProcessAsUser"), false;
 	Win32Handle<HANDLE&> pH(procInfo.hProcess), tH(procInfo.hThread);
 	::WaitForSingleObject(procInfo.hProcess, INFINITE);
 	::GetExitCodeProcess(procInfo.hProcess, &exit);
@@ -299,26 +298,6 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 }
 
 /*
-	A  special-purpose Windows "wndProc", or "Windows Procedure" - used solely
-	for interpreting mouse "wheel" messages in a sub-classed LISTBOX control in
-	a COMBOBOX... which are typically just discarded.
-*/
-static LRESULT CALLBACK listBoxWndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
-{
-	if (mId == WM_MOUSEWHEEL) {
-		const int dY = int(wp) >> 16;
-		periodId += dY < 0 ? 1 : dY > 0 ? -1 : 0;
-		if (periodId < 0)
-			periodId = 0;
-		else if (periodId >= periodIdMax)
-			periodId = periodIdMax - 1;
-		::SendMessage(periodH, CB_SETCURSEL, periodId, 0);
-		return 0;
-	}
-	return ::CallWindowProc(oldListBoxProc, w, mId, wp, lp); // (go with "default" processing)
-}
-
-/*
 	Create and initialize all of the supporting windows and controls, using both
 	"percent of" support and dynamic sizing in doing the detailed layout... this
 	will provide SOME amount of resiliency with respect to different window and
@@ -345,7 +324,26 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 
 	COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 };
 	if (::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)&cbI))
-		oldListBoxProc = (WNDPROC)::SetWindowLongPtr(cbI.hwndList, GWLP_WNDPROC, (LONG_PTR)listBoxWndProc);
+		oldListBoxProc = (WNDPROC)::SetWindowLongPtr(cbI.hwndList, GWLP_WNDPROC,
+			/*
+				Special-purpose "mini-wndProc" - used solely for interpreting
+				mouse "wheel" messages to a sub-classed LISTBOX control in a
+				COMBOBOX... which are typically just discarded.
+			*/
+			(LONG_PTR)WNDPROC([](HWND w, UINT mId, WPARAM wp, LPARAM lp)->LRESULT {
+				if (mId == WM_MOUSEWHEEL) {
+					const int dY = int(wp) >> 16;
+					periodId += dY < 0 ? 1 : dY > 0 ? -1 : 0;
+					if (periodId < 0)
+						periodId = 0;
+					else if (periodId >= periodIdMax)
+						periodId = periodIdMax - 1;
+					::SendMessage(periodH, CB_SETCURSEL, periodId, 0);
+					return 0;
+				}
+				// not for us, leave with "default" processing
+				return ::CallWindowProc(oldListBoxProc, w, mId, wp, lp);
+			}));
 
 	restrictedH = ::CreateWindow(L"BUTTON",
 		L"RunAs restricted and low-integrity process",
@@ -498,7 +496,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	if (!wA)
 		return 1;
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		L"RWip Windows Inactivity Proxy",
+		L"RWip 1.1 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 512, 224, 0, 0, inst, NULL);
 	if (wH == NULL)
