@@ -332,13 +332,14 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 			*/
 			(LONG_PTR)WNDPROC([](HWND w, UINT mId, WPARAM wp, LPARAM lp)->LRESULT {
 				if (mId == WM_MOUSEWHEEL) {
-					const int dY = int(wp) >> 16;
-					periodId += dY < 0 ? 1 : dY > 0 ? -1 : 0;
-					if (periodId < 0)
-						periodId = 0;
-					else if (periodId >= periodIdMax)
-						periodId = periodIdMax - 1;
-					::SendMessage(periodH, CB_SETCURSEL, periodId, 0);
+					const auto dY = int(wp) >> 16;
+					auto id = periodId + (dY < 0 ? 1 : dY > 0 ? -1 : 0);
+					if (id < 0)
+						id = 0;
+					else if (id >= periodIdMax)
+						id = periodIdMax - 1;
+					if (id != periodId)
+						::SendMessage(periodH, CB_SETCURSEL, periodId = id, 0);
 					return 0;
 				}
 				// not for us, leave with "default" processing
