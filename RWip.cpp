@@ -511,7 +511,7 @@ static void saveConfig()
 			if (!shortcutPresent) {
 				// create new "start with Windows" shortcut
 				wchar_t exePath[MAX_PATH];
-				if (::GetModuleFileNameW(NULL, exePath, sizeof exePath) != sizeof exePath) {
+				if (::GetModuleFileNameW(NULL, exePath, MAX_PATH) != MAX_PATH) {
 					psl->SetDescription(L"RWip 1.x");
 					psl->SetPath(exePath);
 					psl->SetShowCmd(SW_SHOWMINNOACTIVE);
