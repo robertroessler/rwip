@@ -29,6 +29,9 @@
 
 #include <windows.h>
 #include <winsafer.h>
+#include <shlobj.h>
+#include <shlwapi.h>
+#include <comdef.h>
 #include <sddl.h>
 #include <string>
 #include <vector>
@@ -101,12 +104,15 @@ static HWND executableH = NULL;
 static HFONT countdownF = NULL;
 static HWND countdownH = NULL;
 static HWND restrictedH = NULL;
+static HWND startWithWindowsH = NULL;
 static HWND periodH = NULL;
 static WNDPROC oldListBoxProc = NULL;
 static int periodId = 4;
+static wchar_t* start_path = NULL;
 
 static Win32Handle<HANDLE> timer{ NULL };
 static DWORD last = 0;
+
 static bool monitorOn = true;
 static bool userPresent = true;
 static bool quitting = false;
@@ -349,15 +355,22 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	restrictedH = ::CreateWindow(L"BUTTON",
 		L"RunAs restricted and low-integrity process",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_MULTILINE,
-		pc2px(widthOf(r), 250), heightOf(r) - pc2px(widthOf(r), 250) - 32 * 2, pc2px(widthOf(r), 4500), 32 * 2,
+		pc2px(widthOf(r), 250), heightOf(r) - pc2px(widthOf(r), 250) - 32 * 3 + 12, pc2px(widthOf(r), 4500), 32 * 2,
 		w, (HMENU)5, cs->hInstance, NULL);
 	::SendMessage(restrictedH, BM_SETCHECK, BST_CHECKED, 0);
+
+	startWithWindowsH = ::CreateWindow(L"BUTTON",
+		L"Start with Windows",
+		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+		pc2px(widthOf(r), 250), heightOf(r) - pc2px(widthOf(r), 250) - 32 * 2 + 20, pc2px(widthOf(r), 4500), 32 * 2,
+		w, (HMENU)6, cs->hInstance, NULL);
+	::SendMessage(startWithWindowsH, BM_SETCHECK, BST_UNCHECKED, 0);
 
 	const auto cX = ::GetSystemMetrics(SM_CXEDGE);
 	const auto cY = ::GetSystemMetrics(SM_CYEDGE);
 	auto hDC = ::GetDC(w);
 	const auto yPixels = ::GetDeviceCaps(hDC, LOGPIXELSY);
-	const auto logicalHeight = -::MulDiv(48, yPixels, 72);
+	const auto logicalHeight = -::MulDiv(56, yPixels, 72);
 	LOGFONT f{ 0 };
 	f.lfHeight = logicalHeight, f.lfWeight = FW_REGULAR, wcscpy(f.lfFaceName, L"Lucida Sans Typewriter");
 	countdownF = ::CreateFontIndirect(&f);
@@ -408,7 +421,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 		}
 		break;
 	case WM_CTLCOLORSTATIC:
-		if ((HWND)lp == restrictedH) {
+		if ((HWND)lp == restrictedH || (HWND)lp == startWithWindowsH) {
 			::SetBkMode((HDC)wp, TRANSPARENT);
 			::SetTextColor((HDC)wp, ::GetSysColor(COLOR_BTNTEXT));
 			return (LRESULT)::GetStockObject(NULL_BRUSH);
@@ -467,6 +480,12 @@ static void loadConfig()
 			::SendMessage(periodH, CB_SETCURSEL, periodId = wcstol(line.substr(4).c_str(), &last, 10), 0);
 		else if (line.find(L"run=") == 0)
 			::SendMessage(restrictedH, BM_SETCHECK, wcstol(line.substr(4).c_str(), &last, 10) != 0 ? BST_CHECKED : BST_UNCHECKED, 0);
+	IShellLinkWPtr psl(CLSID_ShellLink);
+	IPersistFilePtr ppf;
+	bool shortcutPresent = false;
+	if (psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf)))
+		shortcutPresent = SUCCEEDED(ppf->Load((wstring(start_path) + L"/RWip.lnk").c_str(), 0));
+	::SendMessage(startWithWindowsH, BM_SETCHECK, shortcutPresent ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 
 /*
@@ -477,11 +496,39 @@ static void saveConfig()
 	wstring path = configpath();
 	wchar_t cmd[MAX_PATH + 16];
 	const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
-	const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
+	const auto restrict = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
+	const auto startup = ::SendMessage(startWithWindowsH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 	wofstream ss(path, ios::out);
 	ss << L"cmd=" << cmd << endl;
 	ss << L"del=" << periodId << endl;
-	ss << L"run=" << checked << endl;
+	ss << L"run=" << restrict << endl;
+	IShellLinkWPtr psl(CLSID_ShellLink);
+	IPersistFilePtr ppf;
+	if (psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf))) {
+		wstring lnkPath = wstring(start_path) + L"/RWip.lnk";
+		const bool shortcutPresent = SUCCEEDED(ppf->Load(lnkPath.c_str(), 0));
+		if (startup) {
+			if (!shortcutPresent) {
+				// create new "start with Windows" shortcut
+				wchar_t exePath[MAX_PATH];
+				if (::GetModuleFileNameW(NULL, exePath, sizeof exePath) != sizeof exePath) {
+					psl->SetDescription(L"RWip 1.x");
+					psl->SetPath(exePath);
+					psl->SetShowCmd(SW_SHOWMINNOACTIVE);
+					ppf->Save(lnkPath.c_str(), TRUE);
+				}
+			}
+		} else
+			if (shortcutPresent) {
+				// remove existing "start with Windows" shortcut
+				wchar_t* path = NULL;
+				if (SUCCEEDED(ppf->GetCurFile(&path))) {
+					::DeleteFileW(path);
+					::SHChangeNotify(SHCNE_DELETE, SHCNF_PATH | SHCNF_FLUSHNOWAIT, path, NULL);
+					::CoTaskMemFree(path);
+				}
+			}
+	}
 }
 
 /*
@@ -497,11 +544,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	if (!wA)
 		return 1;
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		L"RWip 1.1 - Windows Inactivity Proxy",
+		L"RWip 1.2 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-		0, 0, 512, 224, 0, 0, inst, NULL);
+		0, 0, 560, 232, 0, 0, inst, NULL);
 	if (wH == NULL)
 		return 2;
+	auto hr = ::CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+	::SHGetKnownFolderPath(FOLDERID_Startup, 0, NULL, &start_path);
 	loadConfig();
 	for (const auto& g : powerMsgs)
 		regs.push_back(::RegisterPowerSettingNotification(wH, &g, 0));
@@ -519,5 +568,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	});
 	::DeleteObject(countdownF);
 	saveConfig();
+	::CoTaskMemFree(start_path);
+	::CoUninitialize();
 	return 0;
 }
