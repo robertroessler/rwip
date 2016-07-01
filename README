@@ -44,6 +44,17 @@ After the first run, your settings will be saved in the following "config" file:
 
 (typically in the Windows per-user home directory @ C:\Users\<user-name>)
 
+In addition to the explicitly-saved options mentioned above, RWip can now also
+"sign up" to be started with Windows - optionally, of course.  When RWip is told
+to shutdown, it checks the "Start with Windows" UI checkbox, and sets or removes
+the "RWip.lnk" shortcut in
+
+%USERPROFILE%\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup
+
+... depending on the requested "Start" state.  Note that this ONLY happens upon
+RWip shutdown, so you will need to shutdown and restart RWip if you change this
+option.
+
 Besides being "pure" C++, the code is believed to be both 32/64 -bit "safe", but
 do note that this is a Windows-only application... in fact, in addition to being
 "safe", pre-built executables are available in the releases tree of this repo -
@@ -69,7 +80,10 @@ ToDo
 ====
 Possible items to work on - for myself or collaborators include
 
-* enable RWip to be yet another "always run on system start-up" app... sigh
+* enable RWip to be yet another "always run on system start-up" app... DONE!
+
+* a smarter "auto-sizing" algorithm for layout of the UI, as the current one is
+really only optimal for what used to be called "Large Fonts", scaled @ 125%
 
 * a cool icon (of course)
 
