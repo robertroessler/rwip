@@ -1,5 +1,7 @@
-RWip
-====
+# RWip
+
+[![Build status](https://ci.appveyor.com/api/projects/status/github/robertroessler/rwip?svg=true)](https://ci.appveyor.com/project/robertroessler/rwip)
+
 The RWip (rwip) project was originally created to do one simple thing: restore
 the popular behavior of the built-in Windows screensaver "Bubbles.scr", lost in
 the transition to Windows 8.x (and later).
@@ -60,8 +62,8 @@ do note that this is a Windows-only application... in fact, in addition to being
 "safe", pre-built executables are available in the releases tree of this repo -
 for those eager to start using RWip without waiting to build it.
 
-More Details
-============
+## More Details
+
 
 The reason the much-liked "Bubbles.scr" screensaver lost a lot of its appeal in
 the transition to Windows 8.x is that - for security reasons - Windows started
@@ -76,8 +78,8 @@ course does monitor the screen "power state" and the user's "presence" to know
 when it should shut down the chosen executable (usually a screen saver) and in
 general get out of the way.
 
-ToDo
-====
+## ToDo
+
 Possible items to work on - for myself or collaborators include
 
 * enable RWip to be yet another "always run on system start-up" app... DONE!
@@ -91,8 +93,8 @@ really only optimal for what used to be called "Large Fonts", scaled @ 125%
 known to have changed, e.g., "59:59" -> 1 second earlier only requires painting
 a single digit... on the other hand, the entire app consumes ~1 sec per DAY
 
-ProbablyNot
-===========
+## ProbablyNot
+
 Things that most likely should NOT happen include
 
 * let's see - adding a script language interpreter for the "inactivity" function
