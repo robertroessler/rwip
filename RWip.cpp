@@ -39,6 +39,7 @@
 #include <cwchar>
 #include <fstream>
 #include <utility>
+#include <unordered_map>
 
 //	UN-comment the following line for tracing with ::OutputDebugString()
 #define TRACE_ENABLED
@@ -76,6 +77,31 @@ public:
 	void close() { if (*this) ::CloseHandle(h), h = NULL; }
 };
 
+/*
+	Helper class for matching CoInitialize[Ex]/CoUninitialize calls in a scope.
+*/
+class COMInitialize {
+public:
+	COMInitialize(DWORD initModel = COINIT_MULTITHREADED) { ::CoInitializeEx(NULL, initModel); }
+	~COMInitialize() { ::CoUninitialize(); }
+};
+
+/*
+	Yet anoher "lifetime management" helper template class, this time for items
+	created by the default OLE allocator.
+*/
+template<typename T>
+class COMTaskMemPtr {
+	T p = NULL;
+
+public:
+	~COMTaskMemPtr() { if (*this) ::CoTaskMemFree(p), p = NULL; }
+
+	operator T() const { return p; }
+	explicit operator bool() const { return p != NULL; }
+	T* operator&() { return &p; }
+};
+
 static PROCESS_INFORMATION procInfo{ 0 };
 
 static vector<HPOWERNOTIFY> regs;
@@ -100,6 +126,22 @@ static const pair<wchar_t*, unsigned long> intervals[]{
 };
 constexpr int periodIdMax = sizeof intervals / sizeof intervals[0];
 
+/*
+	Config "database" support, including default values and accessor functions.
+*/
+static unordered_map<wstring, wstring> configDB{
+	{ L"cmd", L"c:\\Windows\\System32\\Bubbles.scr /s" },
+	{ L"del", L"4" },
+	{ L"run", L"1" }
+};
+
+template<typename T>
+inline T getProp(wstring name) { return configDB[name]; }
+template<>
+inline long getProp(wstring name) { return wcstol(getProp<wstring>(name).c_str(), nullptr, 10); }
+template<>
+inline bool getProp(wstring name) { return getProp<long>(name) != 0; }
+
 static HWND executableH = NULL;
 static HFONT countdownF = NULL;
 static HWND countdownH = NULL;
@@ -107,8 +149,8 @@ static HWND restrictedH = NULL;
 static HWND startWithWindowsH = NULL;
 static HWND periodH = NULL;
 static WNDPROC oldListBoxProc = NULL;
-static int periodId = 4;
-static wchar_t* start_path = NULL;
+static int periodId = 0;
+static COMTaskMemPtr<wchar_t*> start_path;
 
 static Win32Handle<HANDLE> timer{ NULL };
 static DWORD last = 0;
@@ -314,7 +356,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	RECT r;
 	::GetClientRect(w, &r);
 	executableH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT",
-		L"c:\\Windows\\System32\\Bubbles.scr /s",
+		getProp<wstring>(L"cmd").c_str(),
 		WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
 		pc2px(widthOf(r), 250), pc2px(widthOf(r), 250), pc2px(widthOf(r), 9500), 32,
 		w, (HMENU)2, cs->hInstance, NULL);
@@ -326,7 +368,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		w, (HMENU)4, cs->hInstance, NULL);
 	for (const auto& p : intervals)
 		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)p.first);
-	::SendMessage(periodH, CB_SETCURSEL, periodId = 4, 0);
+	::SendMessage(periodH, CB_SETCURSEL, periodId = getProp<long>(L"del"), 0);
 
 	COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 };
 	if (::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)&cbI))
@@ -357,14 +399,19 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_MULTILINE,
 		pc2px(widthOf(r), 250), heightOf(r) - pc2px(widthOf(r), 250) - 32 * 3 + 12, pc2px(widthOf(r), 4500), 32 * 2,
 		w, (HMENU)5, cs->hInstance, NULL);
-	::SendMessage(restrictedH, BM_SETCHECK, BST_CHECKED, 0);
+	::SendMessage(restrictedH, BM_SETCHECK, getProp<bool>(L"run") ? BST_CHECKED : BST_UNCHECKED, 0);
 
 	startWithWindowsH = ::CreateWindow(L"BUTTON",
 		L"Start with Windows",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
 		pc2px(widthOf(r), 250), heightOf(r) - pc2px(widthOf(r), 250) - 32 * 2 + 20, pc2px(widthOf(r), 4500), 32 * 2,
 		w, (HMENU)6, cs->hInstance, NULL);
-	::SendMessage(startWithWindowsH, BM_SETCHECK, BST_UNCHECKED, 0);
+	IShellLinkWPtr psl(CLSID_ShellLink);
+	IPersistFilePtr ppf;
+	bool shortcutPresent = false;
+	if (psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf)))
+		shortcutPresent = SUCCEEDED(ppf->Load((wstring(start_path) + L"/RWip.lnk").c_str(), 0));
+	::SendMessage(startWithWindowsH, BM_SETCHECK, shortcutPresent ? BST_CHECKED : BST_UNCHECKED, 0);
 
 	const auto cX = ::GetSystemMetrics(SM_CXEDGE);
 	const auto cY = ::GetSystemMetrics(SM_CYEDGE);
@@ -470,26 +517,17 @@ static wstring configpath()
 static void loadConfig()
 {
 	wstring path = configpath();
-	wchar_t* last = nullptr;
 	wifstream ls(path);
 	wstring line;
 	while (getline(ls, line), ls.is_open() && !ls.eof())
-		if (line.find(L"cmd=") == 0)
-			::SendMessage(executableH, WM_SETTEXT, 0, (LPARAM)(line.substr(4).c_str()));
-		else if (line.find(L"del=") == 0)
-			::SendMessage(periodH, CB_SETCURSEL, periodId = wcstol(line.substr(4).c_str(), &last, 10), 0);
-		else if (line.find(L"run=") == 0)
-			::SendMessage(restrictedH, BM_SETCHECK, wcstol(line.substr(4).c_str(), &last, 10) != 0 ? BST_CHECKED : BST_UNCHECKED, 0);
-	IShellLinkWPtr psl(CLSID_ShellLink);
-	IPersistFilePtr ppf;
-	bool shortcutPresent = false;
-	if (psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf)))
-		shortcutPresent = SUCCEEDED(ppf->Load((wstring(start_path) + L"/RWip.lnk").c_str(), 0));
-	::SendMessage(startWithWindowsH, BM_SETCHECK, shortcutPresent ? BST_CHECKED : BST_UNCHECKED, 0);
+		if (line.length() >= 4 && line[3] == L'=')
+			configDB[line.substr(0, 3)] = line.substr(4);
 }
 
 /*
 	Save our config from the current RWip operating state.
+
+	N.B. - permanent state (i.e., files) [re-]written ONLY as needed
 */
 static void saveConfig()
 {
@@ -497,11 +535,13 @@ static void saveConfig()
 	wchar_t cmd[MAX_PATH + 16];
 	const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
 	const auto restrict = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
+	if (getProp<wstring>(L"cmd") != cmd || getProp<long>(L"del") != periodId || getProp<bool>(L"run") != restrict) {
+		wofstream ss(path, ios::out);
+		ss << L"cmd=" << cmd << endl;
+		ss << L"del=" << periodId << endl;
+		ss << L"run=" << restrict << endl;
+	}
 	const auto startup = ::SendMessage(startWithWindowsH, BM_GETCHECK, 0, 0) == BST_CHECKED;
-	wofstream ss(path, ios::out);
-	ss << L"cmd=" << cmd << endl;
-	ss << L"del=" << periodId << endl;
-	ss << L"run=" << restrict << endl;
 	IShellLinkWPtr psl(CLSID_ShellLink);
 	IPersistFilePtr ppf;
 	if (psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf))) {
@@ -540,18 +580,18 @@ static void saveConfig()
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
 	WNDCLASS wC{ 0, wndProc, 0, 0, inst, NULL, NULL, HBRUSH(COLOR_BACKGROUND), NULL, L"RWipClass" };
+	COMInitialize init(COINIT_APARTMENTTHREADED);
+	::SHGetKnownFolderPath(FOLDERID_Startup, 0, NULL, &start_path);
 	const ATOM wA = ::RegisterClass(&wC);
 	if (!wA)
 		return 1;
+	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
 		L"RWip 1.2 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 232, 0, 0, inst, NULL);
 	if (wH == NULL)
 		return 2;
-	auto hr = ::CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
-	::SHGetKnownFolderPath(FOLDERID_Startup, 0, NULL, &start_path);
-	loadConfig();
 	for (const auto& g : powerMsgs)
 		regs.push_back(::RegisterPowerSettingNotification(wH, &g, 0));
 	last = ::GetTickCount();
@@ -568,7 +608,5 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	});
 	::DeleteObject(countdownF);
 	saveConfig();
-	::CoTaskMemFree(start_path);
-	::CoUninitialize();
 	return 0;
 }
