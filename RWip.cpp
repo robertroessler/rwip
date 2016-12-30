@@ -53,7 +53,7 @@ using namespace std;
 
 	Typically, just declare and initialize with something like
 
-	Win32Handle<HANDLE> hWnd{ NULL };
+	Win32Handle<HANDLE> hWnd{ nullptr };
 
 	... and then just use it when a HANDLE is needed - with these "extras":
 
@@ -71,10 +71,10 @@ public:
 	~Win32Handle() { close(); }
 
 	operator HANDLE() const { return h; }
-	explicit operator bool() const { return h != NULL; }
+	explicit operator bool() const { return h != nullptr; }
 	HANDLE* operator&() { return &h; }
 	HANDLE& operator=(T h_) { return h = h_; }
-	void close() { if (*this) ::CloseHandle(h), h = NULL; }
+	void close() { if (*this) ::CloseHandle(h), h = nullptr; }
 };
 
 /*
@@ -82,7 +82,7 @@ public:
 */
 class COMInitialize {
 public:
-	COMInitialize(DWORD initModel = COINIT_MULTITHREADED) { ::CoInitializeEx(NULL, initModel); }
+	COMInitialize(DWORD initModel = COINIT_MULTITHREADED) { ::CoInitializeEx(nullptr, initModel); }
 	~COMInitialize() { ::CoUninitialize(); }
 };
 
@@ -92,13 +92,13 @@ public:
 */
 template<typename T>
 class COMTaskMemPtr {
-	T p = NULL;
+	T p = nullptr;
 
 public:
-	~COMTaskMemPtr() { if (*this) ::CoTaskMemFree(p), p = NULL; }
+	~COMTaskMemPtr() { if (*this) ::CoTaskMemFree(p), p = nullptr; }
 
 	operator T() const { return p; }
-	explicit operator bool() const { return p != NULL; }
+	explicit operator bool() const { return p != nullptr; }
 	T* operator&() { return &p; }
 };
 
@@ -142,17 +142,17 @@ inline long getProp(wstring name) { return wcstol(getProp<wstring>(name).c_str()
 template<>
 inline bool getProp(wstring name) { return getProp<long>(name) != 0; }
 
-static HWND executableH = NULL;
-static HFONT countdownF = NULL;
-static HWND countdownH = NULL;
-static HWND restrictedH = NULL;
-static HWND startWithWindowsH = NULL;
-static HWND periodH = NULL;
-static WNDPROC oldListBoxProc = NULL;
+static HWND executableH = nullptr;
+static HFONT countdownF = nullptr;
+static HWND countdownH = nullptr;
+static HWND restrictedH = nullptr;
+static HWND startWithWindowsH = nullptr;
+static HWND periodH = nullptr;
+static WNDPROC oldListBoxProc = nullptr;
 static int periodId = 0;
 static COMTaskMemPtr<wchar_t*> start_path;
 
-static Win32Handle<HANDLE> timer{ NULL };
+static Win32Handle<HANDLE> timer{ nullptr };
 static DWORD last = 0;
 
 static bool monitorOn = true;
@@ -260,7 +260,7 @@ static bool runProcessAndWait(wchar_t* cmd, DWORD& exit)
 {
 	trace((wstring(L"RUN INACTIVITY task => ") + cmd).c_str());
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
-	if (!::CreateProcess(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &startInfo, &procInfo))
+	if (!::CreateProcess(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startInfo, &procInfo))
 		return trace(L"*** FAILED CreateProcess"), false;
 	Win32Handle<HANDLE&> pH(procInfo.hProcess), tH(procInfo.hThread);
 	::WaitForSingleObject(procInfo.hProcess, INFINITE);
@@ -276,13 +276,13 @@ static bool runProcessAndWait(wchar_t* cmd, DWORD& exit)
 static bool runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 {
 	trace((wstring(L"RUN *restricted* INACTIVITY task => ") + cmd).c_str());
-	SAFER_LEVEL_HANDLE safer = NULL;
+	SAFER_LEVEL_HANDLE safer = nullptr;
 	// set "Safer" level to... "SAFER_LEVELID_CONSTRAINED"
 	// N.B. - maybe SAFER_LEVELID_NORMALUSER if this is too "tight"?
-	if (!::SaferCreateLevel(SAFER_SCOPEID_USER, SAFER_LEVELID_CONSTRAINED, SAFER_LEVEL_OPEN, &safer, NULL))
+	if (!::SaferCreateLevel(SAFER_SCOPEID_USER, SAFER_LEVELID_CONSTRAINED, SAFER_LEVEL_OPEN, &safer, nullptr))
 		return false;
-	Win32Handle<HANDLE> restricted{ NULL };
-	if (!::SaferComputeTokenFromLevel(safer, NULL, &restricted, SAFER_TOKEN_NULL_IF_EQUAL, NULL) || !restricted)
+	Win32Handle<HANDLE> restricted{ nullptr };
+	if (!::SaferComputeTokenFromLevel(safer, nullptr, &restricted, SAFER_TOKEN_NULL_IF_EQUAL, nullptr) || !restricted)
 		return trace(L"*** FAILED SaferComputeTokenFromLevel"), ::SaferCloseLevel(safer), false;
 	::SaferCloseLevel(safer);
 	// set [new] process integrity... to "Low Mandatory Level"
@@ -295,7 +295,7 @@ static bool runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 		return trace(L"*** FAILED SetTokenInformation"), ::LocalFree(tml.Label.Sid), false;
 	::LocalFree(tml.Label.Sid);
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
-	if (!::CreateProcessAsUser(restricted, NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &startInfo, &procInfo))
+	if (!::CreateProcessAsUser(restricted, nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startInfo, &procInfo))
 		return trace(L"*** FAILED CreateProcessAsUser"), false;
 	Win32Handle<HANDLE&> pH(procInfo.hProcess), tH(procInfo.hThread);
 	::WaitForSingleObject(procInfo.hProcess, INFINITE);
@@ -320,7 +320,7 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 	const auto period = intervals[periodId].second;
 	if (dT >= period) {
 		trace(L"DELETING inactivity timer, STARTING INACTIVITY task...");
-		::DeleteTimerQueueTimer(NULL, timer, NULL), timer = NULL;
+		::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr;
 		wchar_t cmd[256];
 		const auto n = ::SendMessage(executableH, WM_GETTEXT, 256, (LPARAM)cmd);
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -330,7 +330,7 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 			if (userPresent && monitorOn && !timer)
 				trace(L"... RESTARTING inactivity timer!"),
 				last = ::GetTickCount(),
-				::CreateTimerQueueTimer(&timer, NULL, timerCallback, 0, 1000, 1000, WT_EXECUTELONGFUNCTION);
+				::CreateTimerQueueTimer(&timer, nullptr, timerCallback, 0, 1000, 1000, WT_EXECUTELONGFUNCTION);
 			else
 				trace(L"... NOT RESTARTING inactivity timer!");
 		} else
@@ -359,13 +359,13 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		getProp<wstring>(L"cmd").c_str(),
 		WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
 		pc2px(widthOf(r), 250), pc2px(widthOf(r), 250), pc2px(widthOf(r), 9500), 32,
-		w, (HMENU)2, cs->hInstance, NULL);
+		w, (HMENU)2, cs->hInstance, nullptr);
 
 	periodH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"COMBOBOX",
 		L"5",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | CBS_DISABLENOSCROLL,
 		pc2px(widthOf(r), 250), 32 + pc2px(widthOf(r), 500), pc2px(widthOf(r), 4000), heightOf(r) - pc2px(widthOf(r), 750) - 32,
-		w, (HMENU)4, cs->hInstance, NULL);
+		w, (HMENU)4, cs->hInstance, nullptr);
 	for (const auto& p : intervals)
 		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)p.first);
 	::SendMessage(periodH, CB_SETCURSEL, periodId = getProp<long>(L"del"), 0);
@@ -398,14 +398,14 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		L"RunAs restricted and low-integrity process",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_MULTILINE,
 		pc2px(widthOf(r), 250), heightOf(r) - pc2px(widthOf(r), 250) - 32 * 3 + 12, pc2px(widthOf(r), 4500), 32 * 2,
-		w, (HMENU)5, cs->hInstance, NULL);
+		w, (HMENU)5, cs->hInstance, nullptr);
 	::SendMessage(restrictedH, BM_SETCHECK, getProp<bool>(L"run") ? BST_CHECKED : BST_UNCHECKED, 0);
 
 	startWithWindowsH = ::CreateWindow(L"BUTTON",
 		L"Start with Windows",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
 		pc2px(widthOf(r), 250), heightOf(r) - pc2px(widthOf(r), 250) - 32 * 2 + 20, pc2px(widthOf(r), 4500), 32 * 2,
-		w, (HMENU)6, cs->hInstance, NULL);
+		w, (HMENU)6, cs->hInstance, nullptr);
 	IShellLinkWPtr psl(CLSID_ShellLink);
 	IPersistFilePtr ppf;
 	bool shortcutPresent = false;
@@ -431,7 +431,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		L"",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | ES_RIGHT | ES_READONLY,
 		widthOf(r) - pc2px(widthOf(r), 250) - widthOf(t) - cX * 2, 32 + pc2px(widthOf(r), 500), widthOf(t) + cX * 2, heightOf(t) + cY * 2,
-		w, (HMENU)3, cs->hInstance, NULL);
+		w, (HMENU)3, cs->hInstance, nullptr);
 	::SendMessage(countdownH, WM_SETFONT, (WPARAM)countdownF, TRUE);
 }
 
@@ -480,15 +480,15 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 			trace((wstring(L"WM_POWERBROADCAST: ") + powerChange2string(pbs)).c_str());
 			const auto monitorChanged = updateMonitorStatus(pbs), userChanged = updateUserStatus(pbs);
 			if (monitorChanged || userChanged)
-				if (!timer && monitorChanged && !monitorOn && procInfo.hProcess != NULL) {
+				if (!timer && monitorChanged && !monitorOn && procInfo.hProcess != nullptr) {
 					if (::TerminateProcess(procInfo.hProcess, 0))
 						trace(L"WM_POWERBROADCAST, monitor off, TERMINATING inactivity task!");
 				} else if (!timer && ((monitorChanged && monitorOn) || (userChanged && userPresent)))
 					last = ::GetTickCount(),
-					::CreateTimerQueueTimer(&timer, NULL, timerCallback, 0, 1000, 1000, WT_EXECUTELONGFUNCTION),
+					::CreateTimerQueueTimer(&timer, nullptr, timerCallback, 0, 1000, 1000, WT_EXECUTELONGFUNCTION),
 					trace(L"WM_POWERBROADCAST, monitor/user BACK, RESTARTING inactivity timer!");
 				else if (timer && !monitorOn && !userPresent)
-					::DeleteTimerQueueTimer(NULL, timer, NULL), timer = NULL,
+					::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr,
 					trace(L"WM_POWERBROADCAST, monitor/user GONE, DELETING inactivity timer!");
 		} else
 			trace((wstring(L"WM_POWERBROADCAST: ") + powerMsgOther2string(wp)).c_str());
@@ -551,7 +551,7 @@ static void saveConfig()
 			if (!shortcutPresent) {
 				// create new "start with Windows" shortcut
 				wchar_t exePath[MAX_PATH];
-				if (::GetModuleFileNameW(NULL, exePath, MAX_PATH) != MAX_PATH) {
+				if (::GetModuleFileNameW(nullptr, exePath, MAX_PATH) != MAX_PATH) {
 					psl->SetDescription(L"RWip 1.x");
 					psl->SetPath(exePath);
 					psl->SetShowCmd(SW_SHOWMINNOACTIVE);
@@ -561,10 +561,10 @@ static void saveConfig()
 		} else
 			if (shortcutPresent) {
 				// remove existing "start with Windows" shortcut
-				wchar_t* path = NULL;
+				wchar_t* path = nullptr;
 				if (SUCCEEDED(ppf->GetCurFile(&path))) {
 					::DeleteFileW(path);
-					::SHChangeNotify(SHCNE_DELETE, SHCNF_PATH | SHCNF_FLUSHNOWAIT, path, NULL);
+					::SHChangeNotify(SHCNE_DELETE, SHCNF_PATH | SHCNF_FLUSHNOWAIT, path, nullptr);
 					::CoTaskMemFree(path);
 				}
 			}
@@ -579,9 +579,9 @@ static void saveConfig()
 */
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
-	WNDCLASS wC{ 0, wndProc, 0, 0, inst, NULL, NULL, HBRUSH(COLOR_BACKGROUND), NULL, L"RWipClass" };
+	WNDCLASS wC{ 0, wndProc, 0, 0, inst, nullptr, nullptr, HBRUSH(COLOR_BACKGROUND), nullptr, L"RWipClass" };
 	COMInitialize init(COINIT_APARTMENTTHREADED);
-	::SHGetKnownFolderPath(FOLDERID_Startup, 0, NULL, &start_path);
+	::SHGetKnownFolderPath(FOLDERID_Startup, 0, nullptr, &start_path);
 	const ATOM wA = ::RegisterClass(&wC);
 	if (!wA)
 		return 1;
@@ -589,21 +589,21 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
 		L"RWip 1.2 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-		0, 0, 560, 232, 0, 0, inst, NULL);
-	if (wH == NULL)
+		0, 0, 560, 232, 0, 0, inst, nullptr);
+	if (wH == nullptr)
 		return 2;
 	for (const auto& g : powerMsgs)
 		regs.push_back(::RegisterPowerSettingNotification(wH, &g, 0));
 	last = ::GetTickCount();
-	if (!::CreateTimerQueueTimer(&timer, NULL, timerCallback, 0, 1000, 1000, WT_EXECUTELONGFUNCTION))
+	if (!::CreateTimerQueueTimer(&timer, nullptr, timerCallback, 0, 1000, 1000, WT_EXECUTELONGFUNCTION))
 		return 3;
 	trace(L"INITIAL START of inactivity timer and message loop!");
 	MSG m{ 0 };
-	while (::GetMessage(&m, NULL, 0, 0) > 0)
+	while (::GetMessage(&m, nullptr, 0, 0) > 0)
 		::TranslateMessage(&m), ::DispatchMessage(&m);
-	::DeleteTimerQueueTimer(NULL, timer, NULL), timer = NULL;
+	::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr;
 	for_each(cbegin(regs), cend(regs), [](auto r) {
-		if (r != NULL)
+		if (r != nullptr)
 			::UnregisterPowerSettingNotification(r);
 	});
 	::DeleteObject(countdownF);
