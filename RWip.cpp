@@ -105,7 +105,7 @@ public:
 static PROCESS_INFORMATION procInfo{ 0 };
 
 static vector<HPOWERNOTIFY> regs;
-static const GUID powerMsgs[] = {
+static const GUID powerMsgs[]{
 	GUID_CONSOLE_DISPLAY_STATE,
 	GUID_MONITOR_POWER_ON,
 	GUID_SESSION_DISPLAY_STATUS,
@@ -165,8 +165,8 @@ constexpr int pc2px(int w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 
 constexpr int px2pc(int w, int px) { return (int)(px * 10000e0 / w + 0.5e0); }
 
 //	RECT helpers
-inline int widthOf(RECT& r) { return r.right - r.left; }
-inline int heightOf(RECT& r) { return r.bottom - r.top; }
+constexpr int widthOf(RECT& r) { return r.right - r.left; }
+constexpr int heightOf(RECT& r) { return r.bottom - r.top; }
 
 template <typename ...Params>
 static void trace(Params&&... params) {
@@ -182,7 +182,7 @@ static void trace(Params&&... params) {
 static wstring powerChange2string(const POWERBROADCAST_SETTING* pbs)
 {
 	auto f = [](auto pbs) { return to_wstring(*(DWORD*)&pbs->Data); };
-	const GUID& g = pbs->PowerSetting;
+	const auto& g = pbs->PowerSetting;
 	if (g == GUID_CONSOLE_DISPLAY_STATE)
 		return wstring(L"GUID_CONSOLE_DISPLAY_STATE=") + f(pbs);
 	if (g == GUID_MONITOR_POWER_ON)
@@ -228,7 +228,7 @@ static void formatTimeRemaining(wchar_t* buf, size_t n, DWORD dT)
 */
 static bool updateMonitorStatus(const POWERBROADCAST_SETTING* pbs)
 {
-	const GUID& g = pbs->PowerSetting;
+	const auto& g = pbs->PowerSetting;
 	if (g == GUID_CONSOLE_DISPLAY_STATE || g == GUID_MONITOR_POWER_ON || g == GUID_SESSION_DISPLAY_STATUS) {
 		const auto old = monitorOn;
 		monitorOn = *(DWORD*)&pbs->Data != 0;
@@ -242,7 +242,7 @@ static bool updateMonitorStatus(const POWERBROADCAST_SETTING* pbs)
 */
 static bool updateUserStatus(const POWERBROADCAST_SETTING* pbs)
 {
-	const GUID& g = pbs->PowerSetting;
+	const auto& g = pbs->PowerSetting;
 	if (g == GUID_SESSION_USER_PRESENCE) {
 		const auto old = userPresent;
 		userPresent = *(DWORD*)&pbs->Data == 0;
@@ -321,11 +321,11 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 	if (dT >= period) {
 		trace(L"DELETING inactivity timer, STARTING INACTIVITY task...");
 		::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr;
-		wchar_t cmd[256];
-		const auto n = ::SendMessage(executableH, WM_GETTEXT, 256, (LPARAM)cmd);
+		wchar_t cmd[MAX_PATH + 16];
+		const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 		DWORD exit = 0;
-		if (n < 256 && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
+		if (n < MAX_PATH + 16 && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
 			trace((wstring(L"INACTIVITY task finished, exit code=") + to_wstring(exit)).c_str());
 			if (userPresent && monitorOn && !timer)
 				trace(L"... RESTARTING inactivity timer!"),
@@ -516,8 +516,7 @@ static wstring configpath()
 */
 static void loadConfig()
 {
-	wstring path = configpath();
-	wifstream ls(path);
+	wifstream ls(configpath());
 	wstring line;
 	while (getline(ls, line), ls.is_open() && !ls.eof())
 		if (line.length() >= 4 && line[3] == L'=')
@@ -531,12 +530,11 @@ static void loadConfig()
 */
 static void saveConfig()
 {
-	wstring path = configpath();
 	wchar_t cmd[MAX_PATH + 16];
 	const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
 	const auto restrict = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 	if (getProp<wstring>(L"cmd") != cmd || getProp<long>(L"del") != periodId || getProp<bool>(L"run") != restrict) {
-		wofstream ss(path, ios::out);
+		wofstream ss(configpath(), ios::out);
 		ss << L"cmd=" << cmd << endl;
 		ss << L"del=" << periodId << endl;
 		ss << L"run=" << restrict << endl;
@@ -561,11 +559,10 @@ static void saveConfig()
 		} else
 			if (shortcutPresent) {
 				// remove existing "start with Windows" shortcut
-				wchar_t* path = nullptr;
+				COMTaskMemPtr<wchar_t*> path;
 				if (SUCCEEDED(ppf->GetCurFile(&path))) {
 					::DeleteFileW(path);
 					::SHChangeNotify(SHCNE_DELETE, SHCNF_PATH | SHCNF_FLUSHNOWAIT, path, nullptr);
-					::CoTaskMemFree(path);
 				}
 			}
 	}
@@ -587,7 +584,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 		return 1;
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		L"RWip 1.2 - Windows Inactivity Proxy",
+		L"RWip 1.3 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 232, 0, 0, inst, nullptr);
 	if (wH == nullptr)
