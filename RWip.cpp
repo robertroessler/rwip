@@ -158,6 +158,7 @@ static DWORD last = 0;
 static bool monitorOn = true;
 static bool userPresent = true;
 static bool quitting = false;
+static bool forceRun = false;
 
 //	SCALED (x100) and ROUNDED % => pixels
 constexpr int pc2px(int w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 0.5e0 : -0.5e0)); }
@@ -318,7 +319,8 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 		return;
 	auto dT = ::GetTickCount() - last;
 	const auto period = intervals[periodId].second;
-	if (dT >= period) {
+	if (dT >= period || forceRun) {
+		forceRun = false;
 		trace(L"DELETING inactivity timer, STARTING INACTIVITY task...");
 		::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr;
 		wchar_t cmd[MAX_PATH + 16];
@@ -355,16 +357,20 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 {
 	RECT r;
 	::GetClientRect(w, &r);
+	// create "computed constants" to assist in control positioning
+	const auto Rw = widthOf(r), Rh = heightOf(r);	// app dimensions
+	const auto Bw = pc2px(Rw, 250), Bh = Bw;		// window borders
+	const auto Ch = 32;								// control height
 	executableH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT",
 		getProp<wstring>(L"cmd").c_str(),
 		WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
-		pc2px(widthOf(r), 250), pc2px(widthOf(r), 250), pc2px(widthOf(r), 9500), 32,
+		Bw, Bh, Rw - Bw * 2, Ch,
 		w, (HMENU)2, cs->hInstance, nullptr);
 
 	periodH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"COMBOBOX",
 		L"5",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | CBS_DISABLENOSCROLL,
-		pc2px(widthOf(r), 250), 32 + pc2px(widthOf(r), 500), pc2px(widthOf(r), 4000), heightOf(r) - pc2px(widthOf(r), 750) - 32,
+		Bw, Ch + Bh * 2, pc2px(Rw, 4000), Rh - Bh * 3 - Ch,
 		w, (HMENU)4, cs->hInstance, nullptr);
 	for (const auto& p : intervals)
 		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)p.first);
@@ -397,14 +403,14 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	restrictedH = ::CreateWindow(L"BUTTON",
 		L"RunAs restricted and low-integrity process",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_MULTILINE,
-		pc2px(widthOf(r), 250), heightOf(r) - pc2px(widthOf(r), 250) - 32 * 3 + 12, pc2px(widthOf(r), 4500), 32 * 2,
+		Bw, Bh * 2 + Ch * 2, pc2px(Rw, 4500), Ch * 2,
 		w, (HMENU)5, cs->hInstance, nullptr);
 	::SendMessage(restrictedH, BM_SETCHECK, getProp<bool>(L"run") ? BST_CHECKED : BST_UNCHECKED, 0);
 
 	startWithWindowsH = ::CreateWindow(L"BUTTON",
 		L"Start with Windows",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-		pc2px(widthOf(r), 250), heightOf(r) - pc2px(widthOf(r), 250) - 32 * 2 + 20, pc2px(widthOf(r), 4500), 32 * 2,
+		Bw, Bh * 2 + Ch * 3 + Bh / 2, pc2px(Rw, 4500), Ch * 2,
 		w, (HMENU)6, cs->hInstance, nullptr);
 	IShellLinkWPtr psl(CLSID_ShellLink);
 	IPersistFilePtr ppf;
@@ -412,6 +418,12 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	if (psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf)))
 		shortcutPresent = SUCCEEDED(ppf->Load((wstring(start_path) + L"/RWip.lnk").c_str(), 0));
 	::SendMessage(startWithWindowsH, BM_SETCHECK, shortcutPresent ? BST_CHECKED : BST_UNCHECKED, 0);
+
+	auto nowH = ::CreateWindow(L"BUTTON",
+		L"Begin Inactivity Proxy Task NOW",
+		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON ,
+		Bw, Rh - Bh - Ch, Rw - Bw * 2, Ch,
+		w, (HMENU)7, cs->hInstance, nullptr);
 
 	const auto cX = ::GetSystemMetrics(SM_CXEDGE);
 	const auto cY = ::GetSystemMetrics(SM_CYEDGE);
@@ -430,7 +442,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	countdownH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT",
 		L"",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | ES_RIGHT | ES_READONLY,
-		widthOf(r) - pc2px(widthOf(r), 250) - widthOf(t) - cX * 2, 32 + pc2px(widthOf(r), 500), widthOf(t) + cX * 2, heightOf(t) + cY * 2,
+		Rw - Bw - widthOf(t) - cX * 2, Ch + Bh * 2, widthOf(t) + cX * 2, heightOf(t) + cY * 2,
 		w, (HMENU)3, cs->hInstance, nullptr);
 	::SendMessage(countdownH, WM_SETFONT, (WPARAM)countdownF, TRUE);
 }
@@ -465,6 +477,9 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 				periodId = (int)i;
 				return 0;
 			}
+		} else if (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == 7) {
+			forceRun = true, ::ShowWindow(w, SW_MINIMIZE);
+			return 0;
 		}
 		break;
 	case WM_CTLCOLORSTATIC:
@@ -586,7 +601,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
 		L"RWip 1.3 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-		0, 0, 560, 232, 0, 0, inst, nullptr);
+		0, 0, 560, 276, 0, 0, inst, nullptr);
 	if (wH == nullptr)
 		return 2;
 	for (const auto& g : powerMsgs)
