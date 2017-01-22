@@ -148,6 +148,8 @@ static HWND countdownH = nullptr;
 static HWND restrictedH = nullptr;
 static HWND startWithWindowsH = nullptr;
 static HWND periodH = nullptr;
+static HWND runNowH = nullptr;
+static WNDPROC oldButtonProc = nullptr;
 static WNDPROC oldListBoxProc = nullptr;
 static int periodId = 0;
 static COMTaskMemPtr<wchar_t*> start_path;
@@ -419,11 +421,23 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		shortcutPresent = SUCCEEDED(ppf->Load((wstring(start_path) + L"/RWip.lnk").c_str(), 0));
 	::SendMessage(startWithWindowsH, BM_SETCHECK, shortcutPresent ? BST_CHECKED : BST_UNCHECKED, 0);
 
-	auto nowH = ::CreateWindow(L"BUTTON",
+	runNowH = ::CreateWindow(L"BUTTON",
 		L"Begin Inactivity Proxy Task NOW",
-		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON ,
+		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
 		Bw, Rh - Bh - Ch, Rw - Bw * 2, Ch,
 		w, (HMENU)7, cs->hInstance, nullptr);
+	oldButtonProc = (WNDPROC)::SetWindowLongPtr(runNowH, GWLP_WNDPROC,
+		/*
+			Special-purpose "mini-wndProc" - emulate dialog box Enter key.
+		*/
+		(LONG_PTR)WNDPROC([](HWND w, UINT mId, WPARAM wp, LPARAM lp)->LRESULT {
+			if (mId == WM_CHAR && wp == VK_RETURN) {
+				::SendMessage(w, BM_CLICK, 0, 0);
+				return 0;
+			}
+			// not for us, leave with "default" processing
+			return ::CallWindowProc(oldButtonProc, w, mId, wp, lp);
+		}));
 
 	const auto cX = ::GetSystemMetrics(SM_CXEDGE);
 	const auto cY = ::GetSystemMetrics(SM_CYEDGE);
@@ -470,6 +484,12 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 	case WM_CREATE:
 		createChildren(w, (CREATESTRUCT*)lp);
 		return 0;
+	case WM_ACTIVATE:
+		if (wp != WA_INACTIVE) {
+			::SetFocus(runNowH);
+			return 0;
+		}
+		break;
 	case WM_COMMAND:
 		if (HIWORD(wp) == CBN_SELCHANGE) {
 			const auto i = ::SendMessage((HWND)lp, CB_GETCURSEL, 0, 0);
