@@ -1,7 +1,7 @@
 /*
 	RWip.cpp - Windows Inactivity Proxy (a small but useful Windows app)
 
-	Copyright(c) 2016, Robert Roessler
+	Copyright(c) 2016-2017, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -445,7 +445,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	const auto yPixels = ::GetDeviceCaps(hDC, LOGPIXELSY);
 	const auto logicalHeight = -::MulDiv(56, yPixels, 72);
 	LOGFONT f{ 0 };
-	f.lfHeight = logicalHeight, f.lfWeight = FW_REGULAR, wcscpy(f.lfFaceName, L"Lucida Sans Typewriter");
+	f.lfHeight = logicalHeight, f.lfWeight = FW_REGULAR, wcscpy(f.lfFaceName, L"Lucida Sans");
 	countdownF = ::CreateFontIndirect(&f);
 	const auto oldF = ::SelectObject(hDC, countdownF);
 	RECT t{ 0 };
@@ -453,9 +453,9 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	::SelectObject(hDC, oldF);
 	::ReleaseDC(w, hDC);
 
-	countdownH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT",
+	countdownH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"STATIC",
 		L"",
-		WS_CHILD | WS_VISIBLE | WS_BORDER | ES_RIGHT | ES_READONLY,
+		WS_CHILD | WS_VISIBLE | WS_BORDER,
 		Rw - Bw - widthOf(t) - cX * 2, Ch + Bh * 2, widthOf(t) + cX * 2, heightOf(t) + cY * 2,
 		w, (HMENU)3, cs->hInstance, nullptr);
 	::SendMessage(countdownH, WM_SETFONT, (WPARAM)countdownF, TRUE);
