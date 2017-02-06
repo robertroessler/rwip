@@ -619,7 +619,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 		return 1;
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		L"RWip 1.3 - Windows Inactivity Proxy",
+		L"RWip 1.4 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 276, 0, 0, inst, nullptr);
 	if (wH == nullptr)
