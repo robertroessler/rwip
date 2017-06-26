@@ -82,6 +82,8 @@ general get out of the way.
 
 Possible items to work on - for myself or collaborators include
 
+* make RWip *not* activate the designated "inactivity" app if the user appears to be gaming or watching a [fullscreen] video - actually, *any* fullscreen app... DONE!
+
 * enable RWip to be yet another "always run on system start-up" app... DONE!
 
 * a smarter "auto-sizing" algorithm for layout of the UI, as the current one is
