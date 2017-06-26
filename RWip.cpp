@@ -142,6 +142,10 @@ inline long getProp(wstring name) { return wcstol(getProp<wstring>(name).c_str()
 template<>
 inline bool getProp(wstring name) { return getProp<long>(name) != 0; }
 
+static HWND desktopH = ::GetDesktopWindow();
+static RECT desktopR{ 0 };
+static HWND shellH = ::GetShellWindow();
+
 static HWND executableH = nullptr;
 static HFONT countdownF = nullptr;
 static HWND countdownH = nullptr;
@@ -168,8 +172,11 @@ constexpr int pc2px(int w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 
 constexpr int px2pc(int w, int px) { return (int)(px * 10000e0 / w + 0.5e0); }
 
 //	RECT helpers
-constexpr int widthOf(RECT& r) { return r.right - r.left; }
-constexpr int heightOf(RECT& r) { return r.bottom - r.top; }
+constexpr int widthOf(const RECT& r) { return r.right - r.left; }
+constexpr int heightOf(const RECT& r) { return r.bottom - r.top; }
+constexpr bool sameSize(const RECT& r1, const RECT& r2) {
+	return widthOf(r1) == widthOf(r2) && heightOf(r1) == heightOf(r2);
+}
 
 template <typename ...Params>
 static void trace(Params&&... params) {
@@ -307,6 +314,20 @@ static bool runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 }
 
 /*
+	Detect current foreground app running as "fullscreen" (games, videos, etc).
+*/
+static bool runningFullscreenApp()
+{
+	const auto fw = ::GetForegroundWindow();
+	if (fw == NULL || fw == desktopH || fw == shellH)
+		return false;
+	RECT r;
+	if (!::GetWindowRect(fw, &r))
+		return false;
+	return sameSize(r, desktopR);
+}
+
+/*
 	Check once a second to see if
 
 	a) the requested timeout has elapsed, in which case we will create a process
@@ -319,7 +340,12 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 {
 	if (quitting)
 		return;
-	auto dT = ::GetTickCount() - last;
+	const auto ticks = ::GetTickCount();
+	if (runningFullscreenApp()) {
+		last = ticks; // fullscreen mode is NOT treated as "inactivity"
+		return;
+	}
+	auto dT = ticks - last;
 	const auto period = intervals[periodId].second;
 	if (dT >= period || forceRun) {
 		forceRun = false;
@@ -617,6 +643,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	const ATOM wA = ::RegisterClass(&wC);
 	if (!wA)
 		return 1;
+	::GetWindowRect(desktopH, &desktopR);
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
 		L"RWip 1.4 - Windows Inactivity Proxy",
