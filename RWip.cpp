@@ -38,7 +38,10 @@
 #include <algorithm>
 #include <cwchar>
 #include <fstream>
+#include <sstream>
+#include <iomanip>
 #include <utility>
+#include <set>
 #include <unordered_map>
 
 //	UN-comment the following line for tracing with ::OutputDebugString()
@@ -130,7 +133,8 @@ constexpr int periodIdMax = sizeof intervals / sizeof intervals[0];
 	Config "database" support, including default values and accessor functions.
 */
 static unordered_map<wstring, wstring> configDB{
-	{ L"cmd", L"c:\\Windows\\System32\\Bubbles.scr /s" },
+	{ L"cmd", LR"(c:\Windows\System32\Bubbles.scr /s)" },
+	{ L"lib", LR"("c:\\Windows\\System32\\Bubbles.scr /s")" }, // (will be used with std::quoted)
 	{ L"del", L"4" },
 	{ L"run", L"1" }
 };
@@ -376,6 +380,19 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 }
 
 /*
+	Collect cmds from the "lib" property and return as [ordered] set.
+*/
+static set<wstring> collectCmdsFromProperties()
+{
+	set<wstring> elements;
+	wstringstream ss(getProp<wstring>(L"lib"));
+	wstring c;
+	while (ss >> quoted(c))
+		elements.emplace(c);
+	return elements;
+}
+
+/*
 	Create and initialize all of the supporting windows and controls, using both
 	"percent of" support and dynamic sizing in doing the detailed layout... this
 	will provide SOME amount of resiliency with respect to different window and
@@ -389,11 +406,26 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	const auto Rw = widthOf(r), Rh = heightOf(r);	// app dimensions
 	const auto Bw = pc2px(Rw, 250), Bh = Bw;		// window borders
 	const auto Ch = 32;								// control height
-	executableH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"EDIT",
-		getProp<wstring>(L"cmd").c_str(),
-		WS_CHILD | WS_VISIBLE | WS_BORDER | ES_LEFT,
-		Bw, Bh, Rw - Bw * 2, Ch,
+	executableH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"COMBOBOX",
+		nullptr,
+		WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWN | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | CBS_DISABLENOSCROLL | CBS_SORT,
+		Bw + Ch + 4, Bh, Rw - Bw * 2 - Ch * 2 - 4 * 2, Rh - Bh * 3 - Ch,
 		w, (HMENU)2, cs->hInstance, nullptr);
+	for (const auto& c : collectCmdsFromProperties())
+		::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)c.c_str());
+	::SetWindowText(executableH, getProp<wstring>(L"cmd").c_str());
+
+	::CreateWindow(L"BUTTON",
+		L"+",
+		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
+		Bw, Bh, Ch, Ch,
+		w, (HMENU)8, cs->hInstance, nullptr);
+
+	::CreateWindow(L"BUTTON",
+		L"--",
+		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
+		Rw - Bw - Ch, Bh, Ch, Ch,
+		w, (HMENU)9, cs->hInstance, nullptr);
 
 	periodH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"COMBOBOX",
 		L"5",
@@ -517,7 +549,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 		}
 		break;
 	case WM_COMMAND:
-		if (HIWORD(wp) == CBN_SELCHANGE) {
+		if (HIWORD(wp) == CBN_SELCHANGE && LOWORD(wp) == 4) {
 			const auto i = ::SendMessage((HWND)lp, CB_GETCURSEL, 0, 0);
 			if (i != -1) {
 				periodId = (int)i;
@@ -525,6 +557,25 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 			}
 		} else if (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == 7) {
 			forceRun = true, ::ShowWindow(w, SW_MINIMIZE);
+			return 0;
+		} else if (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == 8) {
+			wchar_t cmd[MAX_PATH + 16];
+			::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
+			const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd);
+			if (i == CB_ERR) {
+				// (disallow DUPES)
+				const auto j = ::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)cmd);
+				::SendMessage(executableH, CB_SETCURSEL, j, 0);
+			}
+			return 0;
+		} else if (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == 9) {
+			wchar_t cmd[MAX_PATH + 16];
+			::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
+			const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd);
+			if (i != CB_ERR) {
+				const auto n = ::SendMessage(executableH, CB_DELETESTRING, i, 0);
+				::SendMessage(executableH, CB_SETCURSEL, i < n ? i : i - 1, 0);
+			}
 			return 0;
 		}
 		break;
@@ -585,6 +636,21 @@ static void loadConfig()
 }
 
 /*
+	Collect cmds from the dropdown list and return as [ordered] set.
+*/
+static set<wstring> collectCmdsFromUI()
+{
+	set<wstring> elements;
+	const auto n = ::SendMessage(executableH, CB_GETCOUNT, 0, 0);
+	for (auto i = 0; i < n; i++) {
+		wchar_t cmd[MAX_PATH + 16];
+		::SendMessage(executableH, CB_GETLBTEXT, i, (LPARAM)cmd);
+		elements.emplace(cmd);
+	}
+	return elements;
+}
+
+/*
 	Save our config from the current RWip operating state.
 
 	N.B. - permanent state (i.e., files) [re-]written ONLY as needed
@@ -593,10 +659,15 @@ static void saveConfig()
 {
 	wchar_t cmd[MAX_PATH + 16];
 	const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
+	const auto uiCmds = collectCmdsFromUI();
+	const auto propCmds = collectCmdsFromProperties();
 	const auto restrict = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
-	if (getProp<wstring>(L"cmd") != cmd || getProp<long>(L"del") != periodId || getProp<bool>(L"run") != restrict) {
+	if (getProp<wstring>(L"cmd") != cmd || propCmds != uiCmds ||
+		getProp<long>(L"del") != periodId ||
+		getProp<bool>(L"run") != restrict) {
 		wofstream ss(configpath(), ios::out);
 		ss << L"cmd=" << cmd << endl;
+		ss << L"lib="; for (const auto& c : uiCmds) ss << quoted(c) << L' '; ss << endl;
 		ss << L"del=" << periodId << endl;
 		ss << L"run=" << restrict << endl;
 	}
