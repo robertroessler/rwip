@@ -50,6 +50,18 @@
 using namespace std;
 
 /*
+	Control ID defs... so we don't use numeric constants. :)
+*/
+enum ControlID {
+	Add = 8, Executable = 2, Remove = 9,
+	Period = 4,
+	Restricted = 5,
+	Startup = 6,
+	RunNow = 7,
+	CountDown = 3
+};
+
+/*
 	Template class to help with "lifetime management" of Windows HANDLEs - note
 	that either "direct" use with HANDLEs is supported, OR we can "inherit" an
 	already-opened handle by instantiating the template with a HANDLE&.
@@ -410,7 +422,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		nullptr,
 		WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWN | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | CBS_DISABLENOSCROLL | CBS_SORT,
 		Bw + Ch + 4, Bh, Rw - Bw * 2 - Ch * 2 - 4 * 2, Rh - Bh * 3 - Ch,
-		w, (HMENU)2, cs->hInstance, nullptr);
+		w, (HMENU)Executable, cs->hInstance, nullptr);
 	for (const auto& c : collectCmdsFromProperties())
 		::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)c.c_str());
 	::SetWindowText(executableH, getProp<wstring>(L"cmd").c_str());
@@ -419,19 +431,19 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		L"+",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
 		Bw, Bh, Ch, Ch,
-		w, (HMENU)8, cs->hInstance, nullptr);
+		w, (HMENU)Add, cs->hInstance, nullptr);
 
 	::CreateWindow(L"BUTTON",
 		L"--",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
 		Rw - Bw - Ch, Bh, Ch, Ch,
-		w, (HMENU)9, cs->hInstance, nullptr);
+		w, (HMENU)Remove, cs->hInstance, nullptr);
 
 	periodH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"COMBOBOX",
 		L"5",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | CBS_DISABLENOSCROLL,
 		Bw, Ch + Bh * 2, pc2px(Rw, 4000), Rh - Bh * 3 - Ch,
-		w, (HMENU)4, cs->hInstance, nullptr);
+		w, (HMENU)Period, cs->hInstance, nullptr);
 	for (const auto& p : intervals)
 		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)p.first);
 	::SendMessage(periodH, CB_SETCURSEL, periodId = getProp<long>(L"del"), 0);
@@ -463,15 +475,15 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	restrictedH = ::CreateWindow(L"BUTTON",
 		L"RunAs restricted and low-integrity process",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_MULTILINE,
-		Bw, Bh * 2 + Ch * 2, pc2px(Rw, 4500), Ch * 2,
-		w, (HMENU)5, cs->hInstance, nullptr);
+		Bw, Bh * 2 + Ch * 2, pc2px(Rw, 4250), Ch * 2 - Bh / 2,
+		w, (HMENU)Restricted, cs->hInstance, nullptr);
 	::SendMessage(restrictedH, BM_SETCHECK, getProp<bool>(L"run") ? BST_CHECKED : BST_UNCHECKED, 0);
 
 	startWithWindowsH = ::CreateWindow(L"BUTTON",
 		L"Start with Windows",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-		Bw, Bh * 2 + Ch * 3 + Bh / 2, pc2px(Rw, 4500), Ch * 2,
-		w, (HMENU)6, cs->hInstance, nullptr);
+		Bw, Bh * 4 + Ch * 3, pc2px(Rw, 4250), Ch - Bh / 2,
+		w, (HMENU)Startup, cs->hInstance, nullptr);
 	IShellLinkWPtr psl(CLSID_ShellLink);
 	IPersistFilePtr ppf;
 	bool shortcutPresent = false;
@@ -483,7 +495,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		L"Begin Inactivity Proxy Task NOW",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
 		Bw, Rh - Bh - Ch, Rw - Bw * 2, Ch,
-		w, (HMENU)7, cs->hInstance, nullptr);
+		w, (HMENU)RunNow, cs->hInstance, nullptr);
 	oldButtonProc = (WNDPROC)::SetWindowLongPtr(runNowH, GWLP_WNDPROC,
 		/*
 			Special-purpose "mini-wndProc" - emulate dialog box Enter key.
@@ -515,7 +527,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		L"",
 		WS_CHILD | WS_VISIBLE | WS_BORDER,
 		Rw - Bw - widthOf(t) - cX * 2, Ch + Bh * 2, widthOf(t) + cX * 2, heightOf(t) + cY * 2,
-		w, (HMENU)3, cs->hInstance, nullptr);
+		w, (HMENU)CountDown, cs->hInstance, nullptr);
 	::SendMessage(countdownH, WM_SETFONT, (WPARAM)countdownF, TRUE);
 }
 
@@ -526,12 +538,17 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	of the [main] display, OR supporting the [minimal] GUI interactions.
 
 	Note that as this is a fairly simple Windows GUI, once the child windows and
-	controls are created, we only really watch for notifications from the "drop
-	list" control (signaling a new inactivity delay), "background painting" msgs
-	from the "RunAs" checkbox control (implementing our desired visual style),
-	and the "power broadcast / power setting change" msgs - which we interpret
-	and use to guide our monitoring of the monitor power state and whether the
-	user appears to be "active".
+	controls are created, we only really watch for:
+
+	* "button clicks" from the Add/Remove (+/-) controls supporting maintenance
+	  of the "library" of inactivity executables
+	* notifications from the "drop list" control setting a new inactivity delay
+	* "background painting" msgs from the "RunAs" checkbox control (implementing
+	  our desired visual style)
+	* "power broadcast / power setting change" msgs - which we interpret and use
+	  to guide our monitoring of the monitor power state and whether the user
+	  appears to be "active"
+	* "button clicks" from the RunNow ("Begin Inactivity Task NOW") control
 */
 static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 {
@@ -549,34 +566,40 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 		}
 		break;
 	case WM_COMMAND:
-		if (HIWORD(wp) == CBN_SELCHANGE && LOWORD(wp) == 4) {
-			const auto i = ::SendMessage((HWND)lp, CB_GETCURSEL, 0, 0);
-			if (i != -1) {
-				periodId = (int)i;
+		switch (HIWORD(wp)) {
+		case CBN_SELCHANGE:
+			if (LOWORD(wp) == Period) {
+				const auto i = ::SendMessage((HWND)lp, CB_GETCURSEL, 0, 0);
+				if (i != CB_ERR) {
+					periodId = (int)i;
+					return 0;
+				}
+			}
+			break;
+		case BN_CLICKED:
+			if (LOWORD(wp) == RunNow) {
+				forceRun = true, ::ShowWindow(w, SW_MINIMIZE);
+				return 0;
+			} else if (LOWORD(wp) == Add || LOWORD(wp) == Remove) {
+				wchar_t cmd[MAX_PATH + 16];
+				::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
+				const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd);
+				if (LOWORD(wp) == Add) {
+					if (i == CB_ERR) {
+						// (... only if we DIDN'T find it, i.e., disallow DUPES)
+						const auto j = ::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)cmd);
+						::SendMessage(executableH, CB_SETCURSEL, j, 0);
+					}
+				} else /*if (LOWORD(wp) == Remove)*/ {
+					if (i != CB_ERR) {
+						// (... only if we FOUND it, otherwise, a NO-OP)
+						const auto n = ::SendMessage(executableH, CB_DELETESTRING, i, 0);
+						::SendMessage(executableH, CB_SETCURSEL, i < n ? i : i - 1, 0);
+					}
+				}
 				return 0;
 			}
-		} else if (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == 7) {
-			forceRun = true, ::ShowWindow(w, SW_MINIMIZE);
-			return 0;
-		} else if (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == 8) {
-			wchar_t cmd[MAX_PATH + 16];
-			::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
-			const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd);
-			if (i == CB_ERR) {
-				// (disallow DUPES)
-				const auto j = ::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)cmd);
-				::SendMessage(executableH, CB_SETCURSEL, j, 0);
-			}
-			return 0;
-		} else if (HIWORD(wp) == BN_CLICKED && LOWORD(wp) == 9) {
-			wchar_t cmd[MAX_PATH + 16];
-			::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
-			const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd);
-			if (i != CB_ERR) {
-				const auto n = ::SendMessage(executableH, CB_DELETESTRING, i, 0);
-				::SendMessage(executableH, CB_SETCURSEL, i < n ? i : i - 1, 0);
-			}
-			return 0;
+			break;
 		}
 		break;
 	case WM_CTLCOLORSTATIC:
@@ -625,6 +648,8 @@ static wstring configpath()
 
 /*
 	Load our config if possible, otherwise defaults will be used.
+
+	N.B. - property names are exactly 3 characters... for now.
 */
 static void loadConfig()
 {
@@ -719,7 +744,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
 		L"RWip 1.4 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
-		0, 0, 560, 276, 0, 0, inst, nullptr);
+		0, 0, 560, 280, 0, 0, inst, nullptr);
 	if (wH == nullptr)
 		return 2;
 	for (const auto& g : powerMsgs)
