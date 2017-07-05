@@ -241,12 +241,12 @@ static const wchar_t* powerMsgOther2string(WPARAM wp)
 	Format the time remaining on the inactivity timer as MINUTES AND SECONDS...
 	note that this ONLY supports times up to 1 hour (minus 1 millisecond).
 */
-static void formatTimeRemaining(wchar_t* buf, size_t n, DWORD dT)
+static int formatTimeRemaining(wchar_t* buf, size_t n, DWORD dT)
 {
 	const int seconds = dT / 1000;
 	const int minutes = seconds / 60;
 	const int displaySeconds = seconds % 60;
-	swprintf(buf, n, L"%02d:%02d", minutes, displaySeconds);
+	return swprintf(buf, n, L"%02d:%02d", minutes, displaySeconds);
 }
 
 /*
@@ -334,11 +334,11 @@ static bool runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 */
 static bool runningFullscreenApp()
 {
-	const auto fw = ::GetForegroundWindow();
-	if (fw == NULL || fw == desktopH || fw == shellH)
+	const auto fW = ::GetForegroundWindow();
+	if (fW == NULL || fW == desktopH || fW == shellH)
 		return false;
 	RECT r;
-	if (!::GetWindowRect(fw, &r))
+	if (!::GetWindowRect(fW, &r))
 		return false;
 	return sameSize(r, desktopR);
 }
@@ -352,18 +352,18 @@ static bool runningFullscreenApp()
 	b) the user has interacted with the keyboard and/or mouse, which results in
 	a "re-setting" of the timer - then update the displayed "countdown" value
 */
-static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
+static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 {
 	if (quitting)
 		return;
 	const auto ticks = ::GetTickCount();
-	if (runningFullscreenApp()) {
-		last = ticks; // fullscreen mode is NOT treated as "inactivity"
-		return;
-	}
 	auto dT = ticks - last;
 	const auto period = intervals[periodId].second;
 	if (dT >= period || forceRun) {
+		if (runningFullscreenApp()) {
+			last = ticks; // fullscreen mode is NOT treated as "inactivity"
+			return;
+		}
 		forceRun = false;
 		trace(L"DELETING inactivity timer, STARTING INACTIVITY task...");
 		::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr;
@@ -376,7 +376,7 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 			if (userPresent && monitorOn && !timer)
 				trace(L"... RESTARTING inactivity timer!"),
 				last = ::GetTickCount(),
-				::CreateTimerQueueTimer(&timer, nullptr, timerCallback, 0, 1000, 1000, WT_EXECUTELONGFUNCTION);
+				::CreateTimerQueueTimer(&timer, nullptr, timerCallback, w, 1000, 1000, WT_EXECUTELONGFUNCTION);
 			else
 				trace(L"... NOT RESTARTING inactivity timer!");
 		} else
@@ -385,9 +385,13 @@ static VOID CALLBACK timerCallback(PVOID pvoid, BOOLEAN timerOrWait)
 		LASTINPUTINFO history{ sizeof(LASTINPUTINFO) };
 		if (::GetLastInputInfo(&history) && history.dwTime > last)
 			last = history.dwTime, dT = 1; // max time to display will be 59:59
-		wchar_t buf[16];
-		formatTimeRemaining(buf, 16, period - dT);
-		::SetWindowText(countdownH, buf);
+		WINDOWPLACEMENT wP{ sizeof WINDOWINFO };
+		::GetWindowPlacement((HWND)w, &wP);
+		if (wP.showCmd != SW_SHOWMINIMIZED) {
+			wchar_t buf[16];
+			formatTimeRemaining(buf, 16, period - dT);
+			::SetWindowText(countdownH, buf);
+		}
 	}
 }
 
@@ -750,7 +754,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	for (const auto& g : powerMsgs)
 		regs.push_back(::RegisterPowerSettingNotification(wH, &g, 0));
 	last = ::GetTickCount();
-	if (!::CreateTimerQueueTimer(&timer, nullptr, timerCallback, 0, 1000, 1000, WT_EXECUTELONGFUNCTION))
+	if (!::CreateTimerQueueTimer(&timer, nullptr, timerCallback, wH, 1000, 1000, WT_EXECUTEINLONGTHREAD))
 		return 3;
 	trace(L"INITIAL START of inactivity timer and message loop!");
 	MSG m{ 0 };
