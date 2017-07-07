@@ -24,7 +24,7 @@ layout of windows and controls.
 Usage of RWip is simple:
 
 *	set any "official" Windows screen saver to the "(None)" entry - note that
-	RWip happily co-exists with any "turn off the screen" timeout you choose
+	RWip happily co-exists with any "turn off the screen" system timeout you choose
 
 *	when first run, the presumed executable and parameter is set to
 
@@ -62,8 +62,19 @@ do note that this is a Windows-only application... in fact, in addition to being
 "safe", pre-built executables are available in the releases tree of this repo -
 for those eager to start using RWip without waiting to build it.
 
-## More Details
+## Advanced Usage
 
+To make the most effective use of the "library" (allowing choosing between multiple inactivity apps), here are a few tips:
+
+* to *Add* a new entry, just edit the contents of the currently displayed "inactivity" command - this could involve minor changes to an existing entry, or a complete replacement - but **no** changes will be "official" until you click the "+" (Add) button
+
+* to *Remove* an entry, just scroll it into view and select it, then click the "-" (Remove) button
+
+* the above points notwithstanding, the current/last-edited command is actually maintained independently of the library, so feel free to edit up a new one for testing (or whatever)... as long as you don't actually do the *Add*, it will not change the library contents  
+
+A word on RWip's behavior if "fullscreen" apps are detected: RWip uses heuristics to attempt to guess when you are playing a game or watching a [fullscreen] video, and then operates on the assumption that you don't *want* to have your chosen inactivity app run and interfere with the experience... so, if you are expecting RWip do behave normally, don't walk away from your system with anything running in fullscreen mode.
+
+## More Details
 
 The reason the much-liked "Bubbles.scr" screensaver lost a lot of its appeal in
 the transition to Windows 8.x is that - for security reasons - Windows started
@@ -80,9 +91,11 @@ general get out of the way.
 
 ## ToDo
 
-Possible items to work on - for myself or collaborators include
+Possible items to work on - for myself or collaborators - include
 
 * make RWip *not* activate the designated "inactivity" app if the user appears to be gaming or watching a [fullscreen] video - actually, *any* fullscreen app... DONE!
+
+* support a "library" of inactivity apps via a dropdown list with Add and Remove buttons... DONE!
 
 * enable RWip to be yet another "always run on system start-up" app... DONE!
 
@@ -93,7 +106,7 @@ really only optimal for what used to be called "Large Fonts", scaled @ 125%
 
 * one *could* limit the re-painting of the countdown display to ONLY the areas
 known to have changed, e.g., "59:59" -> 1 second earlier only requires painting
-a single digit... on the other hand, the entire app consumes ~1 sec per DAY
+a single digit... on the other hand, the entire app consumes ~1 sec per DAY (when running in the typical **minimized** state)
 
 ## ProbablyNot
 

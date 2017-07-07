@@ -45,7 +45,7 @@
 #include <unordered_map>
 
 //	UN-comment the following line for tracing with ::OutputDebugString()
-#define TRACE_ENABLED
+//#define TRACE_ENABLED
 
 using namespace std;
 
@@ -360,11 +360,11 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 	auto dT = ticks - last;
 	const auto period = intervals[periodId].second;
 	if (dT >= period || forceRun) {
+		forceRun = false;
 		if (runningFullscreenApp()) {
 			last = ticks; // fullscreen mode is NOT treated as "inactivity"
 			return;
 		}
-		forceRun = false;
 		trace(L"DELETING inactivity timer, STARTING INACTIVITY task...");
 		::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr;
 		wchar_t cmd[MAX_PATH + 16];
@@ -385,7 +385,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 		LASTINPUTINFO history{ sizeof(LASTINPUTINFO) };
 		if (::GetLastInputInfo(&history) && history.dwTime > last)
 			last = history.dwTime, dT = 1; // max time to display will be 59:59
-		WINDOWPLACEMENT wP{ sizeof WINDOWINFO };
+		WINDOWPLACEMENT wP{ sizeof(WINDOWINFO) };
 		::GetWindowPlacement((HWND)w, &wP);
 		if (wP.showCmd != SW_SHOWMINIMIZED) {
 			wchar_t buf[16];
@@ -624,7 +624,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 						trace(L"WM_POWERBROADCAST, monitor off, TERMINATING inactivity task!");
 				} else if (!timer && ((monitorChanged && monitorOn) || (userChanged && userPresent)))
 					last = ::GetTickCount(),
-					::CreateTimerQueueTimer(&timer, nullptr, timerCallback, 0, 1000, 1000, WT_EXECUTELONGFUNCTION),
+					::CreateTimerQueueTimer(&timer, nullptr, timerCallback, w, 1000, 1000, WT_EXECUTELONGFUNCTION),
 					trace(L"WM_POWERBROADCAST, monitor/user BACK, RESTARTING inactivity timer!");
 				else if (timer && !monitorOn && !userPresent)
 					::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr,
@@ -746,7 +746,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	::GetWindowRect(desktopH, &desktopR);
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		L"RWip 1.4 - Windows Inactivity Proxy",
+		L"RWip 1.5 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 280, 0, 0, inst, nullptr);
 	if (wH == nullptr)
@@ -754,7 +754,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	for (const auto& g : powerMsgs)
 		regs.push_back(::RegisterPowerSettingNotification(wH, &g, 0));
 	last = ::GetTickCount();
-	if (!::CreateTimerQueueTimer(&timer, nullptr, timerCallback, wH, 1000, 1000, WT_EXECUTEINLONGTHREAD))
+	if (!::CreateTimerQueueTimer(&timer, nullptr, timerCallback, wH, 1000, 1000, WT_EXECUTELONGFUNCTION))
 		return 3;
 	trace(L"INITIAL START of inactivity timer and message loop!");
 	MSG m{ 0 };
