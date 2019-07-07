@@ -97,7 +97,7 @@ public:
 */
 class COMInitialize {
 public:
-	COMInitialize(DWORD initModel = COINIT_MULTITHREADED) { ::CoInitializeEx(nullptr, initModel); }
+	COMInitialize(DWORD initModel = COINIT_MULTITHREADED) { static_cast<void>(::CoInitializeEx(nullptr, initModel)); }
 	~COMInitialize() { ::CoUninitialize(); }
 };
 
@@ -183,7 +183,7 @@ static bool quitting = false;
 static bool forceRun = false;
 
 //	SCALED (x100) and ROUNDED % => pixels
-constexpr int pc2px(int w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 0.5e0 : -0.5e0)); }
+constexpr int pc2px(long long w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 0.5e0 : -0.5e0)); }
 //	SCALED (x100) and ROUNDED pixels => %
 constexpr int px2pc(int w, int px) { return (int)(px * 10000e0 / w + 0.5e0); }
 
@@ -197,7 +197,11 @@ constexpr bool sameSize(const RECT& r1, const RECT& r2) {
 template <typename ...Params>
 static void trace(Params&&... params) {
 #ifdef TRACE_ENABLED
-	::OutputDebugString(forward<Params>(params)...);
+	static const auto tag{ wstring(L"RWipTRACE> ") };
+	const auto data{ forward<Params>(params)... };
+	return ::OutputDebugString((tag + data).c_str());
+#else
+	return void(0);
 #endif
 }
 
@@ -207,16 +211,17 @@ static void trace(Params&&... params) {
 */
 static wstring powerChange2string(const POWERBROADCAST_SETTING* pbs)
 {
-	auto f = [](auto pbs) { return to_wstring(*(DWORD*)&pbs->Data); };
+	// (N.B. - the Data member *will* be a DWORD whenever this lambda is called)
+	auto f = [pbs]() { return to_wstring(*(DWORD*)&pbs->Data); };
 	const auto& g = pbs->PowerSetting;
 	if (g == GUID_CONSOLE_DISPLAY_STATE)
-		return wstring(L"GUID_CONSOLE_DISPLAY_STATE=") + f(pbs);
+		return wstring(L"GUID_CONSOLE_DISPLAY_STATE=") + f();
 	if (g == GUID_MONITOR_POWER_ON)
-		return wstring(L"GUID_MONITOR_POWER_ON=") + f(pbs);
+		return wstring(L"GUID_MONITOR_POWER_ON=") + f();
 	if (g == GUID_SESSION_DISPLAY_STATUS)
-		return wstring(L"GUID_SESSION_DISPLAY_STATUS=") + f(pbs);
+		return wstring(L"GUID_SESSION_DISPLAY_STATUS=") + f();
 	if (g == GUID_SESSION_USER_PRESENCE)
-		return wstring(L"GUID_SESSION_USER_PRESENCE=") + f(pbs);
+		return wstring(L"GUID_SESSION_USER_PRESENCE=") + f();
 	return L"<other power-management GUID>";
 }
 
@@ -284,7 +289,7 @@ static bool updateUserStatus(const POWERBROADCAST_SETTING* pbs)
 */
 static bool runProcessAndWait(wchar_t* cmd, DWORD& exit)
 {
-	trace((wstring(L"RUN INACTIVITY task => ") + cmd).c_str());
+	trace(wstring(L"RUN INACTIVITY task => ") + cmd);
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
 	if (!::CreateProcess(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startInfo, &procInfo))
 		return trace(L"*** FAILED CreateProcess"), false;
@@ -301,7 +306,7 @@ static bool runProcessAndWait(wchar_t* cmd, DWORD& exit)
 */
 static bool runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 {
-	trace((wstring(L"RUN *restricted* INACTIVITY task => ") + cmd).c_str());
+	trace(wstring(L"RUN *restricted* INACTIVITY task => ") + cmd);
 	SAFER_LEVEL_HANDLE safer = nullptr;
 	// set "Safer" level to... "SAFER_LEVELID_CONSTRAINED"
 	// N.B. - maybe SAFER_LEVELID_NORMALUSER if this is too "tight"?
@@ -366,13 +371,13 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 			return;
 		}
 		trace(L"DELETING inactivity timer, STARTING INACTIVITY task...");
-		::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr;
+		static_cast<void>(::DeleteTimerQueueTimer(nullptr, timer, nullptr)), timer = nullptr;
 		wchar_t cmd[MAX_PATH + 16];
 		const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 		DWORD exit = 0;
 		if (n < MAX_PATH + 16 && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
-			trace((wstring(L"INACTIVITY task finished, exit code=") + to_wstring(exit)).c_str());
+			trace(wstring(L"INACTIVITY task finished, exit code=") + to_wstring(exit));
 			if (userPresent && monitorOn && !timer)
 				trace(L"... RESTARTING inactivity timer!"),
 				last = ::GetTickCount(),
@@ -380,7 +385,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 			else
 				trace(L"... NOT RESTARTING inactivity timer!");
 		} else
-			trace((wstring(L"*** FAILURE executing ") + cmd).c_str());
+			trace(wstring(L"*** FAILURE executing ") + cmd);
 	} else {
 		LASTINPUTINFO history{ sizeof(LASTINPUTINFO) };
 		if (::GetLastInputInfo(&history) && history.dwTime > last)
@@ -616,7 +621,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 	case WM_POWERBROADCAST:
 		if (wp == PBT_POWERSETTINGCHANGE) {
 			const auto pbs = (const POWERBROADCAST_SETTING*)lp;
-			trace((wstring(L"WM_POWERBROADCAST: ") + powerChange2string(pbs)).c_str());
+			trace(wstring(L"WM_POWERBROADCAST: ") + powerChange2string(pbs));
 			const auto monitorChanged = updateMonitorStatus(pbs), userChanged = updateUserStatus(pbs);
 			if (monitorChanged || userChanged)
 				if (!timer && monitorChanged && !monitorOn && procInfo.hProcess != nullptr) {
@@ -627,10 +632,10 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 					::CreateTimerQueueTimer(&timer, nullptr, timerCallback, w, 1000, 1000, WT_EXECUTELONGFUNCTION),
 					trace(L"WM_POWERBROADCAST, monitor/user BACK, RESTARTING inactivity timer!");
 				else if (timer && !monitorOn && !userPresent)
-					::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr,
+					static_cast<void>(::DeleteTimerQueueTimer(nullptr, timer, nullptr)), timer = nullptr,
 					trace(L"WM_POWERBROADCAST, monitor/user GONE, DELETING inactivity timer!");
 		} else
-			trace((wstring(L"WM_POWERBROADCAST: ") + powerMsgOther2string(wp)).c_str());
+			trace(wstring(L"WM_POWERBROADCAST(other): ") + powerMsgOther2string(wp));
 		break;
 	}
 	return ::DefWindowProc(w, mId, wp, lp); // (go with "default" processing)
@@ -646,7 +651,7 @@ static wstring configpath()
 	const int n = ::GetEnvironmentVariable(L"USERPROFILE", path, MAX_PATH);
 	if (n == 0 || n == MAX_PATH)
 		return L".rwipconfig";
-	wcsncat(path, L"\\.rwipconfig", MAX_PATH - n - 1);
+	wcsncat(path, L"\\.rwipconfig", (size_t)MAX_PATH - n - 1);
 	return path;
 }
 
@@ -760,7 +765,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	MSG m{ 0 };
 	while (::GetMessage(&m, nullptr, 0, 0) > 0)
 		::TranslateMessage(&m), ::DispatchMessage(&m);
-	::DeleteTimerQueueTimer(nullptr, timer, nullptr), timer = nullptr;
+	static_cast<void>(::DeleteTimerQueueTimer(nullptr, timer, nullptr)), timer = nullptr;
 	for_each(cbegin(regs), cend(regs), [](auto r) {
 		if (r != nullptr)
 			::UnregisterPowerSettingNotification(r);
