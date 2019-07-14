@@ -33,9 +33,9 @@
 #include <shlwapi.h>
 #include <comdef.h>
 #include <sddl.h>
+
 #include <string>
 #include <vector>
-#include <algorithm>
 #include <cwchar>
 #include <fstream>
 #include <sstream>
@@ -47,12 +47,13 @@
 //	UN-comment the following line for tracing with ::OutputDebugString()
 //#define TRACE_ENABLED
 
-using namespace std;
+using std::wstring;
+using std::endl;
 
 /*
-	Control ID defs... so we don't use numeric constants. :)
+	Control ID defs... so we don't use [unscoped] numeric constants. :)
 */
-enum ControlID {
+enum class ControlID {
 	Add = 8, Executable = 2, Remove = 9,
 	Period = 4,
 	Restricted = 5,
@@ -119,32 +120,36 @@ public:
 
 static PROCESS_INFORMATION procInfo{ 0 };
 
-static vector<HPOWERNOTIFY> regs;
-static const GUID powerMsgs[]{
-	GUID_CONSOLE_DISPLAY_STATE,
-	GUID_MONITOR_POWER_ON,
-	GUID_SESSION_DISPLAY_STATUS,
-	GUID_SESSION_USER_PRESENCE
+static std::vector<HPOWERNOTIFY> regs;
+static const std::pair<wchar_t*, GUID> powerMsgs[]{
+	{ L"GUID_CONSOLE_DISPLAY_STATE", GUID_CONSOLE_DISPLAY_STATE },
+	{ L"GUID_SESSION_DISPLAY_STATUS", GUID_SESSION_DISPLAY_STATUS },
+	{ L"GUID_SESSION_USER_PRESENCE", GUID_SESSION_USER_PRESENCE }
+};
+constexpr std::pair<wchar_t*, WPARAM> powerMsgsOther[]{
+	{ L"PBT_APMSUSPEND", PBT_APMSUSPEND },
+	{ L"PBT_APMRESUMESUSPEND", PBT_APMRESUMESUSPEND },
+	{ L"PBT_APMPOWERSTATUSCHANGE", PBT_APMPOWERSTATUSCHANGE },
+	{ L"PBT_APMRESUMEAUTOMATIC", PBT_APMRESUMEAUTOMATIC }
 };
 
-static const pair<wchar_t*, unsigned long> intervals[]{
-	{ L"1 minute", 1 * 60 * 1000 },
-	{ L"2 minutes", 2 * 60 * 1000 },
-	{ L"3 minutes", 3 * 60 * 1000 },
-	{ L"5 minutes", 5 * 60 * 1000 },
-	{ L"10 minutes", 10 * 60 * 1000 },
-	{ L"15 minutes", 15 * 60 * 1000 },
-	{ L"20 minutes", 20 * 60 * 1000 },
-	{ L"30 minutes", 30 * 60 * 1000 },
-	{ L"45 minutes", 45 * 60 * 1000 },
-	{ L"1 hour", 60 * 60 * 1000 }
+constexpr std::pair<wchar_t*, unsigned long> intervals[]{
+	{ L"1 minute", 1 * 60 * 1000ULL },
+	{ L"2 minutes", 2 * 60 * 1000ULL },
+	{ L"3 minutes", 3 * 60 * 1000ULL },
+	{ L"5 minutes", 5 * 60 * 1000ULL },
+	{ L"10 minutes", 10 * 60 * 1000ULL },
+	{ L"15 minutes", 15 * 60 * 1000ULL },
+	{ L"20 minutes", 20 * 60 * 1000ULL },
+	{ L"30 minutes", 30 * 60 * 1000ULL },
+	{ L"45 minutes", 45 * 60 * 1000ULL },
+	{ L"1 hour", 60 * 60 * 1000ULL }
 };
-constexpr int periodIdMax = sizeof intervals / sizeof intervals[0];
 
 /*
 	Config "database" support, including default values and accessor functions.
 */
-static unordered_map<wstring, wstring> configDB{
+static std::unordered_map<wstring, wstring> configDB{
 	{ L"cmd", LR"(c:\Windows\System32\Bubbles.scr /s)" },
 	{ L"lib", LR"("c:\\Windows\\System32\\Bubbles.scr /s")" }, // (will be used with std::quoted)
 	{ L"del", L"4" },
@@ -152,11 +157,16 @@ static unordered_map<wstring, wstring> configDB{
 };
 
 template<typename T>
-inline T getProp(wstring name) { return configDB[name]; }
+constexpr T getProp(wstring name) { return configDB[name]; }
 template<>
 inline long getProp(wstring name) { return wcstol(getProp<wstring>(name).c_str(), nullptr, 10); }
 template<>
 inline bool getProp(wstring name) { return getProp<long>(name) != 0; }
+
+static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait);
+
+static Win32Handle<HANDLE> timer{ nullptr };
+static auto last = 0ULL;
 
 static HWND desktopH = ::GetDesktopWindow();
 static RECT desktopR{ 0 };
@@ -171,39 +181,38 @@ static HWND periodH = nullptr;
 static HWND runNowH = nullptr;
 static WNDPROC oldButtonProc = nullptr;
 static WNDPROC oldListBoxProc = nullptr;
-static int periodId = 0;
+static auto periodId = 0;
 static COMTaskMemPtr<wchar_t*> start_path;
 
-static Win32Handle<HANDLE> timer{ nullptr };
-static DWORD last = 0;
-
-static bool monitorOn = true;
-static bool userPresent = true;
-static bool quitting = false;
-static bool forceRun = false;
+static auto monitorOn = true;
+static auto userPresent = true;
+static auto quitting = false;
+static auto forceRun = false;
 
 //	SCALED (x100) and ROUNDED % => pixels
-constexpr int pc2px(long long w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 0.5e0 : -0.5e0)); }
+constexpr auto pc2px(long long w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 0.5e0 : -0.5e0)); }
 //	SCALED (x100) and ROUNDED pixels => %
-constexpr int px2pc(int w, int px) { return (int)(px * 10000e0 / w + 0.5e0); }
+constexpr auto px2pc(int w, int px) { return (int)(px * 10000e0 / w + 0.5e0); }
 
 //	RECT helpers
-constexpr int widthOf(const RECT& r) { return r.right - r.left; }
-constexpr int heightOf(const RECT& r) { return r.bottom - r.top; }
-constexpr bool sameSize(const RECT& r1, const RECT& r2) {
+constexpr auto widthOf(const RECT& r) { return r.right - r.left; }
+constexpr auto heightOf(const RECT& r) { return r.bottom - r.top; }
+constexpr auto sameSize(const RECT& r1, const RECT& r2) {
 	return widthOf(r1) == widthOf(r2) && heightOf(r1) == heightOf(r2);
 }
 
-template <typename ...Params>
-static void trace(Params&&... params) {
+/*
+	"Old school" version of optional tracing... now implemented with the CPP
+	(aka the C/C++ Preprocessor), rather than cool new stuff like template meta-
+	programming and constexpr if, as I wanted there to be NO evaluation of exprs
+	at the trace(...) call sites in the "NO trace" mode of operation.
+*/
 #ifdef TRACE_ENABLED
-	static const auto tag{ wstring(L"RWipTRACE> ") };
-	const auto data{ forward<Params>(params)... };
-	return ::OutputDebugString((tag + data).c_str());
+static const wstring traceTag{ L"RWipTRACE> " };
+#define trace(args) ::OutputDebugString((traceTag + args).c_str())
 #else
-	return void(0);
+#define trace(args) void(0)
 #endif
-}
 
 /*
 	Format for display the POWERBROADCAST_SETTING param from a WM_POWERBROADCAST
@@ -211,17 +220,19 @@ static void trace(Params&&... params) {
 */
 static wstring powerChange2string(const POWERBROADCAST_SETTING* pbs)
 {
-	// (N.B. - the Data member *will* be a DWORD whenever this lambda is called)
-	auto f = [pbs]() { return to_wstring(*(DWORD*)&pbs->Data); };
-	const auto& g = pbs->PowerSetting;
-	if (g == GUID_CONSOLE_DISPLAY_STATE)
-		return wstring(L"GUID_CONSOLE_DISPLAY_STATE=") + f();
-	if (g == GUID_MONITOR_POWER_ON)
-		return wstring(L"GUID_MONITOR_POWER_ON=") + f();
-	if (g == GUID_SESSION_DISPLAY_STATUS)
-		return wstring(L"GUID_SESSION_DISPLAY_STATUS=") + f();
-	if (g == GUID_SESSION_USER_PRESENCE)
-		return wstring(L"GUID_SESSION_USER_PRESENCE=") + f();
+	auto f = [](GUID g, DWORD d) {
+		constexpr const wchar_t* displayState[]{ L"off", L"on", L"dimmed" };
+		constexpr const wchar_t* userPresence[]{ L"present", L"", L"inactive" };
+		if (g == GUID_CONSOLE_DISPLAY_STATE || g == GUID_SESSION_DISPLAY_STATUS)
+			return displayState[d];
+		else if (g == GUID_SESSION_USER_PRESENCE)
+			return userPresence[d];
+		return L""; // ("shouldn't happen")
+	};
+	// (N.B. - the Data member will be a DWORD whenever ...->Data is evaluated!)
+	for (const auto& [label, guid] : powerMsgs)
+		if (pbs->PowerSetting == guid)
+			return wstring(label) + L'=' + f(guid, *(DWORD*)pbs->Data);
 	return L"<other power-management GUID>";
 }
 
@@ -229,57 +240,41 @@ static wstring powerChange2string(const POWERBROADCAST_SETTING* pbs)
 	Format for display the older, non-POWERBROADCAST_SETTING param variant of a
 	WM_POWERBROADCAST message.
 */
-static const wchar_t* powerMsgOther2string(WPARAM wp)
+constexpr const wchar_t* powerMsgOther2string(WPARAM wp)
 {
-	if (wp == PBT_APMSUSPEND)
-		return L"PBT_APMSUSPEND";
-	if (wp == PBT_APMRESUMESUSPEND)
-		return L"PBT_APMRESUMESUSPEND";
-	if (wp == PBT_APMPOWERSTATUSCHANGE)
-		return L"PBT_APMPOWERSTATUSCHANGE";
-	if (wp == PBT_APMRESUMEAUTOMATIC)
-		return L"PBT_APMRESUMEAUTOMATIC";
+	for (const auto& [label, msg] : powerMsgsOther)
+		if (wp == msg)
+			return label;
 	return L"<other power-management event>";
+}
+
+/*
+	Create a new [callback] timer, passing the supplied window to the callback.
+*/
+inline auto createTimer(HWND w)
+{
+	return ::CreateTimerQueueTimer(&timer, nullptr, timerCallback, w, 1000, 1000, WT_EXECUTELONGFUNCTION);
+}
+
+/*
+	Safely delete an existing [callback] timer.
+*/
+inline void deleteTimer()
+{
+	if (timer)
+		static_cast<void>(::DeleteTimerQueueTimer(nullptr, timer, nullptr)), timer = nullptr;
 }
 
 /*
 	Format the time remaining on the inactivity timer as MINUTES AND SECONDS...
 	note that this ONLY supports times up to 1 hour (minus 1 millisecond).
 */
-static int formatTimeRemaining(wchar_t* buf, size_t n, DWORD dT)
+static auto formatTimeRemaining(wchar_t* buf, size_t n, decltype(last) dT)
 {
-	const int seconds = dT / 1000;
-	const int minutes = seconds / 60;
+	const int seconds = int(dT / 1000);
+	const int minutes = int(seconds / 60);
 	const int displaySeconds = seconds % 60;
 	return swprintf(buf, n, L"%02d:%02d", minutes, displaySeconds);
-}
-
-/*
-	Reflect new/changed monitor power status AS REQUIRED.
-*/
-static bool updateMonitorStatus(const POWERBROADCAST_SETTING* pbs)
-{
-	const auto& g = pbs->PowerSetting;
-	if (g == GUID_CONSOLE_DISPLAY_STATE || g == GUID_MONITOR_POWER_ON || g == GUID_SESSION_DISPLAY_STATUS) {
-		const auto old = monitorOn;
-		monitorOn = *(DWORD*)&pbs->Data != 0;
-		return monitorOn != old;
-	}
-	return false;
-}
-
-/*
-	Reflect new/changed "user presence" status AS REQUIRED.
-*/
-static bool updateUserStatus(const POWERBROADCAST_SETTING* pbs)
-{
-	const auto& g = pbs->PowerSetting;
-	if (g == GUID_SESSION_USER_PRESENCE) {
-		const auto old = userPresent;
-		userPresent = *(DWORD*)&pbs->Data == 0;
-		return userPresent != old;
-	}
-	return false;
 }
 
 /*
@@ -337,7 +332,7 @@ static bool runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 /*
 	Detect current foreground app running as "fullscreen" (games, videos, etc).
 */
-static bool runningFullscreenApp()
+static auto runningFullscreenApp()
 {
 	const auto fW = ::GetForegroundWindow();
 	if (fW == NULL || fW == desktopH || fW == shellH)
@@ -361,9 +356,9 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 {
 	if (quitting)
 		return;
-	const auto ticks = ::GetTickCount();
+	const auto ticks = ::GetTickCount64();
 	auto dT = ticks - last;
-	const auto period = intervals[periodId].second;
+	const auto& [_, period] = intervals[periodId];
 	if (dT >= period || forceRun) {
 		forceRun = false;
 		if (runningFullscreenApp()) {
@@ -371,17 +366,17 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 			return;
 		}
 		trace(L"DELETING inactivity timer, STARTING INACTIVITY task...");
-		static_cast<void>(::DeleteTimerQueueTimer(nullptr, timer, nullptr)), timer = nullptr;
+		deleteTimer();
 		wchar_t cmd[MAX_PATH + 16];
 		const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 		DWORD exit = 0;
 		if (n < MAX_PATH + 16 && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
-			trace(wstring(L"INACTIVITY task finished, exit code=") + to_wstring(exit));
+			trace(wstring(L"INACTIVITY task finished, exit code=") + std::to_wstring(exit));
 			if (userPresent && monitorOn && !timer)
 				trace(L"... RESTARTING inactivity timer!"),
-				last = ::GetTickCount(),
-				::CreateTimerQueueTimer(&timer, nullptr, timerCallback, w, 1000, 1000, WT_EXECUTELONGFUNCTION);
+				last = ::GetTickCount64(),
+				createTimer((HWND)w);
 			else
 				trace(L"... NOT RESTARTING inactivity timer!");
 		} else
@@ -389,12 +384,12 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 	} else {
 		LASTINPUTINFO history{ sizeof(LASTINPUTINFO) };
 		if (::GetLastInputInfo(&history) && history.dwTime > last)
-			last = history.dwTime, dT = 1; // max time to display will be 59:59
+			last = decltype(last)(history.dwTime), dT = 1; // max time to display will be 59:59
 		WINDOWPLACEMENT wP{ sizeof(WINDOWINFO) };
 		::GetWindowPlacement((HWND)w, &wP);
 		if (wP.showCmd != SW_SHOWMINIMIZED) {
 			wchar_t buf[16];
-			formatTimeRemaining(buf, 16, period - dT);
+			formatTimeRemaining(buf, std::size(buf), period - dT);
 			::SetWindowText(countdownH, buf);
 		}
 	}
@@ -403,10 +398,10 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 /*
 	Collect cmds from the "lib" property and return as [ordered] set.
 */
-static set<wstring> collectCmdsFromProperties()
+static auto collectCmdsFromProperties()
 {
-	set<wstring> elements;
-	wstringstream ss(getProp<wstring>(L"lib"));
+	std::set<wstring> elements;
+	std::wstringstream ss(getProp<wstring>(L"lib"));
 	wstring c;
 	while (ss >> quoted(c))
 		elements.emplace(c);
@@ -431,7 +426,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		nullptr,
 		WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWN | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | CBS_DISABLENOSCROLL | CBS_SORT,
 		Bw + Ch + 4, Bh, Rw - Bw * 2 - Ch * 2 - 4 * 2, Rh - Bh * 3 - Ch,
-		w, (HMENU)Executable, cs->hInstance, nullptr);
+		w, (HMENU)ControlID::Executable, cs->hInstance, nullptr);
 	for (const auto& c : collectCmdsFromProperties())
 		::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)c.c_str());
 	::SetWindowText(executableH, getProp<wstring>(L"cmd").c_str());
@@ -440,25 +435,24 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		L"+",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
 		Bw, Bh, Ch, Ch,
-		w, (HMENU)Add, cs->hInstance, nullptr);
+		w, (HMENU)ControlID::Add, cs->hInstance, nullptr);
 
 	::CreateWindow(L"BUTTON",
 		L"--",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
 		Rw - Bw - Ch, Bh, Ch, Ch,
-		w, (HMENU)Remove, cs->hInstance, nullptr);
+		w, (HMENU)ControlID::Remove, cs->hInstance, nullptr);
 
 	periodH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"COMBOBOX",
 		L"5",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | CBS_DISABLENOSCROLL,
 		Bw, Ch + Bh * 2, pc2px(Rw, 4000), Rh - Bh * 3 - Ch,
-		w, (HMENU)Period, cs->hInstance, nullptr);
-	for (const auto& p : intervals)
-		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)p.first);
+		w, (HMENU)ControlID::Period, cs->hInstance, nullptr);
+	for (const auto& [label, _] : intervals)
+		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)label);
 	::SendMessage(periodH, CB_SETCURSEL, periodId = getProp<long>(L"del"), 0);
 
-	COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 };
-	if (::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)&cbI))
+	if (COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 }; ::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)&cbI))
 		oldListBoxProc = (WNDPROC)::SetWindowLongPtr(cbI.hwndList, GWLP_WNDPROC,
 			/*
 				Special-purpose "mini-wndProc" - used solely for interpreting
@@ -471,8 +465,8 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 					auto id = periodId + (dY < 0 ? 1 : dY > 0 ? -1 : 0);
 					if (id < 0)
 						id = 0;
-					else if (id >= periodIdMax)
-						id = periodIdMax - 1;
+					else if (id >= size(intervals))
+						id = decltype(id)(size(intervals) - 1);
 					if (id != periodId)
 						::SendMessage(periodH, CB_SETCURSEL, periodId = id, 0);
 					return 0;
@@ -485,18 +479,17 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		L"RunAs restricted and low-integrity process",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_MULTILINE,
 		Bw, Bh * 2 + Ch * 2, pc2px(Rw, 4250), Ch * 2 - Bh / 2,
-		w, (HMENU)Restricted, cs->hInstance, nullptr);
+		w, (HMENU)ControlID::Restricted, cs->hInstance, nullptr);
 	::SendMessage(restrictedH, BM_SETCHECK, getProp<bool>(L"run") ? BST_CHECKED : BST_UNCHECKED, 0);
 
 	startWithWindowsH = ::CreateWindow(L"BUTTON",
 		L"Start with Windows",
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
 		Bw, Bh * 4 + Ch * 3, pc2px(Rw, 4250), Ch - Bh / 2,
-		w, (HMENU)Startup, cs->hInstance, nullptr);
-	IShellLinkWPtr psl(CLSID_ShellLink);
+		w, (HMENU)ControlID::Startup, cs->hInstance, nullptr);
 	IPersistFilePtr ppf;
 	bool shortcutPresent = false;
-	if (psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf)))
+	if (IShellLinkWPtr psl(CLSID_ShellLink); psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf)))
 		shortcutPresent = SUCCEEDED(ppf->Load((wstring(start_path) + L"/RWip.lnk").c_str(), 0));
 	::SendMessage(startWithWindowsH, BM_SETCHECK, shortcutPresent ? BST_CHECKED : BST_UNCHECKED, 0);
 
@@ -504,7 +497,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		L"Begin Inactivity Proxy Task NOW",
 		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
 		Bw, Rh - Bh - Ch, Rw - Bw * 2, Ch,
-		w, (HMENU)RunNow, cs->hInstance, nullptr);
+		w, (HMENU)ControlID::RunNow, cs->hInstance, nullptr);
 	oldButtonProc = (WNDPROC)::SetWindowLongPtr(runNowH, GWLP_WNDPROC,
 		/*
 			Special-purpose "mini-wndProc" - emulate dialog box Enter key.
@@ -536,8 +529,34 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		L"",
 		WS_CHILD | WS_VISIBLE | WS_BORDER,
 		Rw - Bw - widthOf(t) - cX * 2, Ch + Bh * 2, widthOf(t) + cX * 2, heightOf(t) + cY * 2,
-		w, (HMENU)CountDown, cs->hInstance, nullptr);
+		w, (HMENU)ControlID::CountDown, cs->hInstance, nullptr);
 	::SendMessage(countdownH, WM_SETFONT, (WPARAM)countdownF, TRUE);
+}
+
+/*
+	Reflect new/changed monitor power status AS REQUIRED.
+*/
+static auto updateMonitorStatus(const POWERBROADCAST_SETTING* pbs)
+{
+	if (const auto& g = pbs->PowerSetting; g == GUID_CONSOLE_DISPLAY_STATE || g == GUID_MONITOR_POWER_ON || g == GUID_SESSION_DISPLAY_STATUS) {
+		const auto old = monitorOn;
+		monitorOn = *(DWORD*)pbs->Data != 0;
+		return monitorOn != old;
+	}
+	return false;
+}
+
+/*
+	Reflect new/changed "user presence" status AS REQUIRED.
+*/
+static auto updateUserStatus(const POWERBROADCAST_SETTING* pbs)
+{
+	if (const auto& g = pbs->PowerSetting; g == GUID_SESSION_USER_PRESENCE) {
+		const auto old = userPresent;
+		userPresent = *(DWORD*)pbs->Data == 0;
+		return userPresent != old;
+	}
+	return false;
 }
 
 /*
@@ -577,7 +596,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 	case WM_COMMAND:
 		switch (HIWORD(wp)) {
 		case CBN_SELCHANGE:
-			if (LOWORD(wp) == Period) {
+			if (LOWORD(wp) == (WORD)ControlID::Period) {
 				const auto i = ::SendMessage((HWND)lp, CB_GETCURSEL, 0, 0);
 				if (i != CB_ERR) {
 					periodId = (int)i;
@@ -586,14 +605,13 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 			}
 			break;
 		case BN_CLICKED:
-			if (LOWORD(wp) == RunNow) {
+			if (LOWORD(wp) == (WORD)ControlID::RunNow) {
 				forceRun = true, ::ShowWindow(w, SW_MINIMIZE);
 				return 0;
-			} else if (LOWORD(wp) == Add || LOWORD(wp) == Remove) {
+			} else if (LOWORD(wp) == (WORD)ControlID::Add || LOWORD(wp) == (WORD)ControlID::Remove) {
 				wchar_t cmd[MAX_PATH + 16];
 				::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
-				const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd);
-				if (LOWORD(wp) == Add) {
+				if (const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd); LOWORD(wp) == (WORD)ControlID::Add) {
 					if (i == CB_ERR) {
 						// (... only if we DIDN'T find it, i.e., disallow DUPES)
 						const auto j = ::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)cmd);
@@ -622,17 +640,16 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 		if (wp == PBT_POWERSETTINGCHANGE) {
 			const auto pbs = (const POWERBROADCAST_SETTING*)lp;
 			trace(wstring(L"WM_POWERBROADCAST: ") + powerChange2string(pbs));
-			const auto monitorChanged = updateMonitorStatus(pbs), userChanged = updateUserStatus(pbs);
-			if (monitorChanged || userChanged)
+			if (const auto monitorChanged = updateMonitorStatus(pbs), userChanged = updateUserStatus(pbs); monitorChanged || userChanged)
 				if (!timer && monitorChanged && !monitorOn && procInfo.hProcess != nullptr) {
 					if (::TerminateProcess(procInfo.hProcess, 0))
 						trace(L"WM_POWERBROADCAST, monitor off, TERMINATING inactivity task!");
 				} else if (!timer && ((monitorChanged && monitorOn) || (userChanged && userPresent)))
-					last = ::GetTickCount(),
-					::CreateTimerQueueTimer(&timer, nullptr, timerCallback, w, 1000, 1000, WT_EXECUTELONGFUNCTION),
+					last = ::GetTickCount64(),
+					createTimer(w),
 					trace(L"WM_POWERBROADCAST, monitor/user BACK, RESTARTING inactivity timer!");
 				else if (timer && !monitorOn && !userPresent)
-					static_cast<void>(::DeleteTimerQueueTimer(nullptr, timer, nullptr)), timer = nullptr,
+					deleteTimer(),
 					trace(L"WM_POWERBROADCAST, monitor/user GONE, DELETING inactivity timer!");
 		} else
 			trace(wstring(L"WM_POWERBROADCAST(other): ") + powerMsgOther2string(wp));
@@ -662,9 +679,9 @@ static wstring configpath()
 */
 static void loadConfig()
 {
-	wifstream ls(configpath());
+	std::wifstream ls(configpath());
 	wstring line;
-	while (getline(ls, line), ls.is_open() && !ls.eof())
+	while (std::getline(ls, line), ls.is_open() && !ls.eof())
 		if (line.length() >= 4 && line[3] == L'=')
 			configDB[line.substr(0, 3)] = line.substr(4);
 }
@@ -672,9 +689,9 @@ static void loadConfig()
 /*
 	Collect cmds from the dropdown list and return as [ordered] set.
 */
-static set<wstring> collectCmdsFromUI()
+static auto collectCmdsFromUI()
 {
-	set<wstring> elements;
+	std::set<wstring> elements;
 	const auto n = ::SendMessage(executableH, CB_GETCOUNT, 0, 0);
 	for (auto i = 0; i < n; i++) {
 		wchar_t cmd[MAX_PATH + 16];
@@ -699,19 +716,17 @@ static void saveConfig()
 	if (getProp<wstring>(L"cmd") != cmd || propCmds != uiCmds ||
 		getProp<long>(L"del") != periodId ||
 		getProp<bool>(L"run") != restrict) {
-		wofstream ss(configpath(), ios::out);
+		std::wofstream ss(configpath(), std::ios::out);
 		ss << L"cmd=" << cmd << endl;
 		ss << L"lib="; for (const auto& c : uiCmds) ss << quoted(c) << L' '; ss << endl;
 		ss << L"del=" << periodId << endl;
 		ss << L"run=" << restrict << endl;
 	}
 	const auto startup = ::SendMessage(startWithWindowsH, BM_GETCHECK, 0, 0) == BST_CHECKED;
-	IShellLinkWPtr psl(CLSID_ShellLink);
 	IPersistFilePtr ppf;
-	if (psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf))) {
+	if (IShellLinkWPtr psl(CLSID_ShellLink); psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf))) {
 		wstring lnkPath = wstring(start_path) + L"/RWip.lnk";
-		const bool shortcutPresent = SUCCEEDED(ppf->Load(lnkPath.c_str(), 0));
-		if (startup) {
+		if (const auto shortcutPresent = SUCCEEDED(ppf->Load(lnkPath.c_str(), 0)); startup) {
 			if (!shortcutPresent) {
 				// create new "start with Windows" shortcut
 				wchar_t exePath[MAX_PATH];
@@ -751,25 +766,23 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	::GetWindowRect(desktopH, &desktopR);
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		L"RWip 1.5 - Windows Inactivity Proxy",
+		L"RWip 1.6 - Windows Inactivity Proxy",
 		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 280, 0, 0, inst, nullptr);
 	if (wH == nullptr)
 		return 2;
-	for (const auto& g : powerMsgs)
-		regs.push_back(::RegisterPowerSettingNotification(wH, &g, 0));
-	last = ::GetTickCount();
-	if (!::CreateTimerQueueTimer(&timer, nullptr, timerCallback, wH, 1000, 1000, WT_EXECUTELONGFUNCTION))
+	for (const auto& [_, guid] : powerMsgs)
+		regs.push_back(::RegisterPowerSettingNotification(wH, &guid, 0));
+	last = ::GetTickCount64();
+	if (!createTimer(wH))
 		return 3;
 	trace(L"INITIAL START of inactivity timer and message loop!");
 	MSG m{ 0 };
 	while (::GetMessage(&m, nullptr, 0, 0) > 0)
 		::TranslateMessage(&m), ::DispatchMessage(&m);
-	static_cast<void>(::DeleteTimerQueueTimer(nullptr, timer, nullptr)), timer = nullptr;
-	for_each(cbegin(regs), cend(regs), [](auto r) {
-		if (r != nullptr)
-			::UnregisterPowerSettingNotification(r);
-	});
+	deleteTimer();
+	for (const auto& r : regs)
+		::UnregisterPowerSettingNotification(r);
 	::DeleteObject(countdownF);
 	saveConfig();
 	return 0;
