@@ -133,7 +133,7 @@ constexpr std::pair<wchar_t*, WPARAM> powerMsgsOther[]{
 	{ L"PBT_APMRESUMEAUTOMATIC", PBT_APMRESUMEAUTOMATIC }
 };
 
-constexpr std::pair<wchar_t*, unsigned long> intervals[]{
+constexpr std::pair<wchar_t*, unsigned long long> intervals[]{
 	{ L"1 minute", 1 * 60 * 1000ULL },
 	{ L"2 minutes", 2 * 60 * 1000ULL },
 	{ L"3 minutes", 3 * 60 * 1000ULL },
@@ -147,7 +147,7 @@ constexpr std::pair<wchar_t*, unsigned long> intervals[]{
 };
 
 /*
-	Config "database" support, including default values and accessor functions.
+	Config "database" support, including defaults and *primitive* accessor fns.
 */
 static std::unordered_map<wstring, wstring> configDB{
 	{ L"cmd", LR"(c:\Windows\System32\Bubbles.scr /s)" },
@@ -157,11 +157,17 @@ static std::unordered_map<wstring, wstring> configDB{
 };
 
 template<typename T>
-constexpr T getProp(wstring name) { return configDB[name]; }
+constexpr T getProp(const wstring& name) {
+	const auto umi = configDB.find(name);
+	return umi != configDB.end() ? umi->second : T();
+}
 template<>
-inline long getProp(wstring name) { return wcstol(getProp<wstring>(name).c_str(), nullptr, 10); }
+inline long getProp(const wstring& name) {
+	const auto umi = configDB.find(name);
+	return umi != configDB.end() ? wcstol(umi->second.c_str(), nullptr, 10) : 0;
+}
 template<>
-inline bool getProp(wstring name) { return getProp<long>(name) != 0; }
+inline bool getProp(const wstring& name) { return getProp<long>(name) != 0; }
 
 static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait);
 
@@ -403,7 +409,7 @@ static auto collectCmdsFromProperties()
 	std::set<wstring> elements;
 	std::wstringstream ss(getProp<wstring>(L"lib"));
 	wstring c;
-	while (ss >> quoted(c))
+	while (ss >> std::quoted(c))
 		elements.emplace(c);
 	return elements;
 }
@@ -421,7 +427,8 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 	// create "computed constants" to assist in control positioning
 	const auto Rw = widthOf(r), Rh = heightOf(r);	// app dimensions
 	const auto Bw = pc2px(Rw, 250), Bh = Bw;		// window borders
-	const auto Ch = 32;								// control height
+	constexpr auto Ch = 32;							// control height
+
 	executableH = ::CreateWindowEx(WS_EX_CLIENTEDGE, L"COMBOBOX",
 		nullptr,
 		WS_CHILD | WS_VISIBLE | WS_BORDER | CBS_DROPDOWN | CBS_HASSTRINGS | CBS_NOINTEGRALHEIGHT | CBS_DISABLENOSCROLL | CBS_SORT,
@@ -465,8 +472,8 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 					auto id = periodId + (dY < 0 ? 1 : dY > 0 ? -1 : 0);
 					if (id < 0)
 						id = 0;
-					else if (id >= size(intervals))
-						id = decltype(id)(size(intervals) - 1);
+					else if (id >= decltype(id)(size(intervals)))
+						id = decltype(id)(size(intervals)) - 1;
 					if (id != periodId)
 						::SendMessage(periodH, CB_SETCURSEL, periodId = id, 0);
 					return 0;
@@ -718,7 +725,7 @@ static void saveConfig()
 		getProp<bool>(L"run") != restrict) {
 		std::wofstream ss(configpath(), std::ios::out);
 		ss << L"cmd=" << cmd << endl;
-		ss << L"lib="; for (const auto& c : uiCmds) ss << quoted(c) << L' '; ss << endl;
+		ss << L"lib="; for (const auto& c : uiCmds) ss << std::quoted(c) << L' '; ss << endl;
 		ss << L"del=" << periodId << endl;
 		ss << L"run=" << restrict << endl;
 	}
