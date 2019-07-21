@@ -1,7 +1,7 @@
 /*
 	RWip.cpp - Windows Inactivity Proxy (a small but useful Windows app)
 
-	Copyright(c) 2016-2017, Robert Roessler
+	Copyright(c) 2016-2019, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -288,7 +288,7 @@ static auto formatTimeRemaining(wchar_t* buf, size_t n, decltype(last) dT)
 	only when the process completes OR in case of error on the "create"... the
 	credentials and privileges of the RWip user will be used.
 */
-static bool runProcessAndWait(wchar_t* cmd, DWORD& exit)
+static auto runProcessAndWait(wchar_t* cmd, DWORD& exit)
 {
 	trace(wstring(L"RUN INACTIVITY task => ") + cmd);
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
@@ -305,7 +305,7 @@ static bool runProcessAndWait(wchar_t* cmd, DWORD& exit)
 	only when the process completes OR in case of error on the "create"... a
 	"restricted" version of the RWip user's credentials/integrity will be used.
 */
-static bool runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
+static auto runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 {
 	trace(wstring(L"RUN *restricted* INACTIVITY task => ") + cmd);
 	SAFER_LEVEL_HANDLE safer = nullptr;
@@ -774,7 +774,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
 		L"RWip 1.6 - Windows Inactivity Proxy",
-		WS_BORDER | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
+		WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 280, 0, 0, inst, nullptr);
 	if (wH == nullptr)
 		return 2;
