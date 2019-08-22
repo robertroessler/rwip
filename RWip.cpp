@@ -69,7 +69,17 @@ enum class ControlID {
 
 	Typically, just declare and initialize with something like
 
-	Win32Handle<HANDLE> hWnd{ nullptr };
+	handle<HANDLE> hWnd{};				// explicit "wrapped" handle
+	handle hWnd{};						// equivalent, since HANDLE is default
+
+	... or, through the C++17 magic of "CTAD", the below is possible
+
+	handle hWnd{ HANDLE() };
+
+	... or more usefully
+
+	PROCESS_INFORMATION procInfo;
+	handle_ref processHandle(procInfo.hProcess);
 
 	... and then just use it when a HANDLE is needed - with these "extras":
 
@@ -77,20 +87,27 @@ enum class ControlID {
 	* after the close, the underlying/wrapped HANDLE is set to NULL
 	* casting to bool explicitly or implicitly works, returning true if non-NULL
 */
-template<typename T>
-class Win32Handle {
+template<typename T = HANDLE>
+class handle {
 	T h;
 
 public:
-	Win32Handle() = delete;				// (be clear we INSIST on initializing)
-	Win32Handle(T h_) : h(h_) {}		// (with either a HANDLE or HANDLE&...)
-	~Win32Handle() { close(); }
+	handle() : h(T()) {}				// (we WILL initialize when you do not)
+	handle(T h) : h(h) {}				// (with either a HANDLE or HANDLE&...)
+	~handle() { close(); }				// (no need to be virtual: simplicity!)
 
 	operator HANDLE() const { return h; }
 	explicit operator bool() const { return h != nullptr; }
 	HANDLE* operator&() { return &h; }
 	HANDLE& operator=(T h_) { return h = h_; }
 	void close() { if (*this) ::CloseHandle(h), h = nullptr; }
+};
+
+template<typename T>
+class handle_ref : public handle<T&> {
+public:
+	handle_ref() = delete;				// (be clear we INSIST on initializing)
+	handle_ref(T h) : handle(h) {}		// (with either a HANDLE or HANDLE&...)
 };
 
 /*
@@ -118,7 +135,7 @@ public:
 	T* operator&() { return &p; }
 };
 
-static PROCESS_INFORMATION procInfo{ 0 };
+static PROCESS_INFORMATION procInfo{};
 
 static std::vector<HPOWERNOTIFY> regs;
 static const std::pair<wchar_t*, GUID> powerMsgs[]{
@@ -171,11 +188,11 @@ inline bool getProp(const wstring& name) { return getProp<long>(name) != 0; }
 
 static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait);
 
-static Win32Handle<HANDLE> timer{ nullptr };
+static handle timer{};
 static auto last = 0ULL;
 
 static HWND desktopH = ::GetDesktopWindow();
-static RECT desktopR{ 0 };
+static RECT desktopR{};
 static HWND shellH = ::GetShellWindow();
 
 static HWND executableH = nullptr;
@@ -294,7 +311,7 @@ static auto runProcessAndWait(wchar_t* cmd, DWORD& exit)
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
 	if (!::CreateProcess(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startInfo, &procInfo))
 		return trace(L"*** FAILED CreateProcess"), false;
-	Win32Handle<HANDLE&> pH(procInfo.hProcess), tH(procInfo.hThread);
+	handle_ref pH(procInfo.hProcess), tH(procInfo.hThread);
 	::WaitForSingleObject(procInfo.hProcess, INFINITE);
 	::GetExitCodeProcess(procInfo.hProcess, &exit);
 	return true;
@@ -308,18 +325,18 @@ static auto runProcessAndWait(wchar_t* cmd, DWORD& exit)
 static auto runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 {
 	trace(wstring(L"RUN *restricted* INACTIVITY task => ") + cmd);
-	SAFER_LEVEL_HANDLE safer = nullptr;
+	SAFER_LEVEL_HANDLE safer{};
 	// set "Safer" level to... "SAFER_LEVELID_CONSTRAINED"
 	// N.B. - maybe SAFER_LEVELID_NORMALUSER if this is too "tight"?
 	if (!::SaferCreateLevel(SAFER_SCOPEID_USER, SAFER_LEVELID_CONSTRAINED, SAFER_LEVEL_OPEN, &safer, nullptr))
 		return false;
-	Win32Handle<HANDLE> restricted{ nullptr };
+	handle restricted{};
 	if (!::SaferComputeTokenFromLevel(safer, nullptr, &restricted, SAFER_TOKEN_NULL_IF_EQUAL, nullptr) || !restricted)
 		return trace(L"*** FAILED SaferComputeTokenFromLevel"), ::SaferCloseLevel(safer), false;
 	::SaferCloseLevel(safer);
 	// set [new] process integrity... to "Low Mandatory Level"
 	// N.B. - maybe "Medium Mandatory Level" ("S-1-16-8192") if needed?
-	TOKEN_MANDATORY_LABEL tml{ 0 };
+	TOKEN_MANDATORY_LABEL tml{};
 	tml.Label.Attributes = SE_GROUP_INTEGRITY;
 	if (!::ConvertStringSidToSid(L"S-1-16-4096", &tml.Label.Sid))
 		return false;
@@ -329,7 +346,7 @@ static auto runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
 	if (!::CreateProcessAsUser(restricted, nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startInfo, &procInfo))
 		return trace(L"*** FAILED CreateProcessAsUser"), false;
-	Win32Handle<HANDLE&> pH(procInfo.hProcess), tH(procInfo.hThread);
+	handle_ref pH(procInfo.hProcess), tH(procInfo.hThread);
 	::WaitForSingleObject(procInfo.hProcess, INFINITE);
 	::GetExitCodeProcess(procInfo.hProcess, &exit);
 	return true;
@@ -459,21 +476,21 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)label);
 	::SendMessage(periodH, CB_SETCURSEL, periodId = getProp<long>(L"del"), 0);
 
-	if (COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 }; ::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)&cbI))
+	if (COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 }; ::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)& cbI))
 		oldListBoxProc = (WNDPROC)::SetWindowLongPtr(cbI.hwndList, GWLP_WNDPROC,
 			/*
 				Special-purpose "mini-wndProc" - used solely for interpreting
 				mouse "wheel" messages to a sub-classed LISTBOX control in a
 				COMBOBOX... which are typically just discarded.
 			*/
-			(LONG_PTR)WNDPROC([](HWND w, UINT mId, WPARAM wp, LPARAM lp)->LRESULT {
+		(LONG_PTR)WNDPROC([](HWND w, UINT mId, WPARAM wp, LPARAM lp)->LRESULT {
 				if (mId == WM_MOUSEWHEEL) {
 					const auto dY = int(wp) >> 16;
 					auto id = periodId + (dY < 0 ? 1 : dY > 0 ? -1 : 0);
 					if (id < 0)
 						id = 0;
-					else if (id >= decltype(id)(size(intervals)))
-						id = decltype(id)(size(intervals)) - 1;
+					else if (id >= decltype(id)(std::size(intervals)))
+						id = decltype(id)(std::size(intervals)) - 1;
 					if (id != periodId)
 						::SendMessage(periodH, CB_SETCURSEL, periodId = id, 0);
 					return 0;
@@ -516,18 +533,18 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 			}
 			// not for us, leave with "default" processing
 			return ::CallWindowProc(oldButtonProc, w, mId, wp, lp);
-		}));
+			}));
 
 	const auto cX = ::GetSystemMetrics(SM_CXEDGE);
 	const auto cY = ::GetSystemMetrics(SM_CYEDGE);
 	auto hDC = ::GetDC(w);
 	const auto yPixels = ::GetDeviceCaps(hDC, LOGPIXELSY);
 	const auto logicalHeight = -::MulDiv(56, yPixels, 72);
-	LOGFONT f{ 0 };
+	LOGFONT f{};
 	f.lfHeight = logicalHeight, f.lfWeight = FW_REGULAR, wcscpy(f.lfFaceName, L"Lucida Sans");
 	countdownF = ::CreateFontIndirect(&f);
 	const auto oldF = ::SelectObject(hDC, countdownF);
-	RECT t{ 0 };
+	RECT t{};
 	::DrawText(hDC, L"59:59", 5, &t, DT_CALCRECT);
 	::SelectObject(hDC, oldF);
 	::ReleaseDC(w, hDC);
@@ -784,7 +801,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	if (!createTimer(wH))
 		return 3;
 	trace(L"INITIAL START of inactivity timer and message loop!");
-	MSG m{ 0 };
+	MSG m{};
 	while (::GetMessage(&m, nullptr, 0, 0) > 0)
 		::TranslateMessage(&m), ::DispatchMessage(&m);
 	deleteTimer();
