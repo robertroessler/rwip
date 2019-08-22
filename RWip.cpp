@@ -361,9 +361,7 @@ static auto runningFullscreenApp()
 	if (fW == NULL || fW == desktopH || fW == shellH)
 		return false;
 	RECT r;
-	if (!::GetWindowRect(fW, &r))
-		return false;
-	return sameSize(r, desktopR);
+	return ::GetWindowRect(fW, &r) ? sameSize(r, desktopR) : false;
 }
 
 /*
@@ -381,8 +379,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 		return;
 	const auto ticks = ::GetTickCount64();
 	auto dT = ticks - last;
-	const auto& [_, period] = intervals[periodId];
-	if (dT >= period || forceRun) {
+	if (const auto& [_, period] = intervals[periodId]; dT >= period || forceRun) {
 		forceRun = false;
 		if (runningFullscreenApp()) {
 			last = ticks; // fullscreen mode is NOT treated as "inactivity"
@@ -405,12 +402,9 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 		} else
 			trace(wstring(L"*** FAILURE executing ") + cmd);
 	} else {
-		LASTINPUTINFO history{ sizeof(LASTINPUTINFO) };
-		if (::GetLastInputInfo(&history) && history.dwTime > last)
+		if (LASTINPUTINFO history{ sizeof(LASTINPUTINFO) }; ::GetLastInputInfo(&history) && history.dwTime > last)
 			last = decltype(last)(history.dwTime), dT = 1; // max time to display will be 59:59
-		WINDOWPLACEMENT wP{ sizeof(WINDOWINFO) };
-		::GetWindowPlacement((HWND)w, &wP);
-		if (wP.showCmd != SW_SHOWMINIMIZED) {
+		if (WINDOWPLACEMENT wP{ sizeof(WINDOWINFO) }; ::GetWindowPlacement((HWND)w, &wP) && wP.showCmd != SW_SHOWMINIMIZED) {
 			wchar_t buf[16];
 			formatTimeRemaining(buf, std::size(buf), period - dT);
 			::SetWindowText(countdownH, buf);
@@ -425,8 +419,7 @@ static auto collectCmdsFromProperties()
 {
 	std::set<wstring> elements;
 	std::wstringstream ss(getProp<wstring>(L"lib"));
-	wstring c;
-	while (ss >> std::quoted(c))
+	for (wstring c; ss >> std::quoted(c);)
 		elements.emplace(c);
 	return elements;
 }
@@ -620,13 +613,11 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 	case WM_COMMAND:
 		switch (HIWORD(wp)) {
 		case CBN_SELCHANGE:
-			if (LOWORD(wp) == (WORD)ControlID::Period) {
-				const auto i = ::SendMessage((HWND)lp, CB_GETCURSEL, 0, 0);
-				if (i != CB_ERR) {
+			if (LOWORD(wp) == (WORD)ControlID::Period)
+				if (const auto i = ::SendMessage((HWND)lp, CB_GETCURSEL, 0, 0); i != CB_ERR) {
 					periodId = (int)i;
 					return 0;
 				}
-			}
 			break;
 		case BN_CLICKED:
 			if (LOWORD(wp) == (WORD)ControlID::RunNow) {
@@ -751,25 +742,21 @@ static void saveConfig()
 	if (IShellLinkWPtr psl(CLSID_ShellLink); psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf))) {
 		wstring lnkPath = wstring(start_path) + L"/RWip.lnk";
 		if (const auto shortcutPresent = SUCCEEDED(ppf->Load(lnkPath.c_str(), 0)); startup) {
-			if (!shortcutPresent) {
+			if (!shortcutPresent)
 				// create new "start with Windows" shortcut
-				wchar_t exePath[MAX_PATH];
-				if (::GetModuleFileNameW(nullptr, exePath, MAX_PATH) != MAX_PATH) {
+				if (wchar_t exePath[MAX_PATH]; ::GetModuleFileNameW(nullptr, exePath, MAX_PATH) != MAX_PATH) {
 					psl->SetDescription(L"RWip 1.x");
 					psl->SetPath(exePath);
 					psl->SetShowCmd(SW_SHOWMINNOACTIVE);
 					ppf->Save(lnkPath.c_str(), TRUE);
 				}
-			}
 		} else
-			if (shortcutPresent) {
+			if (shortcutPresent)
 				// remove existing "start with Windows" shortcut
-				COMTaskMemPtr<wchar_t*> path;
-				if (SUCCEEDED(ppf->GetCurFile(&path))) {
+				if (COMTaskMemPtr<wchar_t*> path; SUCCEEDED(ppf->GetCurFile(&path))) {
 					::DeleteFileW(path);
 					::SHChangeNotify(SHCNE_DELETE, SHCNF_PATH | SHCNF_FLUSHNOWAIT, path, nullptr);
 				}
-			}
 	}
 }
 
