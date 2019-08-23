@@ -37,6 +37,7 @@
 #include <string>
 #include <vector>
 #include <cwchar>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -46,6 +47,8 @@
 
 //	UN-comment the following line for tracing with ::OutputDebugString()
 //#define TRACE_ENABLED
+
+namespace fs = std::filesystem;
 
 using std::wstring;
 using std::endl;
@@ -677,14 +680,11 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 	Synthesize and return the FULL path to the RWip config... in the unlikely
 	event that the USERPROFILE env var is NOT set, just use the current dir.
 */
-static wstring configpath()
+static auto configpath()
 {
 	wchar_t path[MAX_PATH];
-	const int n = ::GetEnvironmentVariable(L"USERPROFILE", path, MAX_PATH);
-	if (n == 0 || n == MAX_PATH)
-		return L".rwipconfig";
-	wcsncat(path, L"\\.rwipconfig", (size_t)MAX_PATH - n - 1);
-	return path;
+	const auto n = ::GetEnvironmentVariable(L"USERPROFILE", path, MAX_PATH);
+	return (n == 0 || n >= MAX_PATH ? fs::current_path() : fs::path(path)) / L".rwipconfig";
 }
 
 /*
@@ -695,8 +695,7 @@ static wstring configpath()
 static void loadConfig()
 {
 	std::wifstream ls(configpath());
-	wstring line;
-	while (std::getline(ls, line), ls.is_open() && !ls.eof())
+	for (wstring line; std::getline(ls, line), ls.is_open() && !ls.eof();)
 		if (line.length() >= 4 && line[3] == L'=')
 			configDB[line.substr(0, 3)] = line.substr(4);
 }
