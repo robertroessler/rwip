@@ -34,6 +34,7 @@
 #include <comdef.h>
 #include <sddl.h>
 
+#include <type_traits>
 #include <string>
 #include <vector>
 #include <cwchar>
@@ -100,6 +101,8 @@ public:
 	~handle() { close(); }				// (no need to be virtual: simplicity!)
 
 	operator HANDLE() const { return h; }
+	template<typename = std::enable_if_t<!std::is_reference_v<T>>>
+	operator PHANDLE() { return &h; }
 	explicit operator bool() const { return h != nullptr; }
 	HANDLE* operator&() { return &h; }
 	HANDLE& operator=(T h_) { return h = h_; }
@@ -334,7 +337,7 @@ static auto runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 	if (!::SaferCreateLevel(SAFER_SCOPEID_USER, SAFER_LEVELID_CONSTRAINED, SAFER_LEVEL_OPEN, &safer, nullptr))
 		return false;
 	handle restricted{};
-	if (!::SaferComputeTokenFromLevel(safer, nullptr, &restricted, SAFER_TOKEN_NULL_IF_EQUAL, nullptr) || !restricted)
+	if (!::SaferComputeTokenFromLevel(safer, nullptr, restricted, SAFER_TOKEN_NULL_IF_EQUAL, nullptr) || !restricted)
 		return trace(L"*** FAILED SaferComputeTokenFromLevel"), ::SaferCloseLevel(safer), false;
 	::SaferCloseLevel(safer);
 	// set [new] process integrity... to "Low Mandatory Level"
@@ -472,7 +475,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)label);
 	::SendMessage(periodH, CB_SETCURSEL, periodId = getProp<long>(L"del"), 0);
 
-	if (COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 }; ::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)& cbI))
+	if (COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 }; ::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)&cbI))
 		oldListBoxProc = (WNDPROC)::SetWindowLongPtr(cbI.hwndList, GWLP_WNDPROC,
 			/*
 				Special-purpose "mini-wndProc" - used solely for interpreting
