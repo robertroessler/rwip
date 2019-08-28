@@ -16,7 +16,7 @@ simple a [GUI] Windows app can be... with nary a bulky framework, manifest file,
 or DLL in sight, one can create a functional piece of code with a pleasing and
 useful interface - that may be easily extended.
 
-It is written in fairly idiomatic modern C++ 11/14, and in addition to the main
+It is written in fairly idiomatic modern C++ 11/14/17, and in addition to the main
 "inactivity" functionality, also includes "helper" templates and functions that
 can assist with Windows "handle" lifetime management, as well as aiding in the
 layout of windows and controls.
@@ -106,7 +106,7 @@ really only optimal for what used to be called "Large Fonts", scaled @ 125%
 
 * one *could* limit the re-painting of the countdown display to ONLY the areas
 known to have changed, e.g., "59:59" -> 1 second earlier only requires painting
-a single digit... on the other hand, the entire app consumes ~1 sec per DAY (when running in the typical **minimized** state)
+a single digit... on the other hand, the entire app consumes *well under ~1 sec per DAY* (when running in the typical **minimized** state)
 
 ## ProbablyNot
 
