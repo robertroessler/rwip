@@ -68,6 +68,11 @@ enum class ControlID {
 };
 
 /*
+	Monitor state has 3 cases, so a simple "bool" is inadequate.
+*/
+enum class Monitor : std::int8_t { Off, On, Dimmed };
+
+/*
 	Template class to help with "lifetime management" of Windows HANDLEs - note
 	that either "direct" use with HANDLEs is supported, OR we can "inherit" an
 	already-opened handle by instantiating the template with a HANDLE&.
@@ -214,7 +219,7 @@ static WNDPROC oldListBoxProc = nullptr;
 static auto periodId = 0;
 static COMTaskMemPtr<wchar_t*> start_path;
 
-static auto monitorOn = true;
+static auto monitorState = Monitor::On;
 static auto userPresent = true;
 static auto quitting = false;
 static auto forceRun = false;
@@ -257,7 +262,7 @@ static auto tracePre()
 		runningFullscreenApp() ? L'f' : L'_',
 		timer ? L't' : L'_',
 		userPresent ? L'U' : L'_',
-		monitorOn ? L'M' : L'_');
+		monitorState == Monitor::On ? L'M' : monitorState == Monitor::Dimmed ? L'm' : L'_');
 	return wstring(b, n);
 }
 #define trace(args) ::OutputDebugStringW((tracePre() + args).c_str())
@@ -401,18 +406,18 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 			last = ticks; // fullscreen mode is NOT treated as "inactivity"
 			return;
 		}
-		trace(L"DELETING inactivity timer, STARTING INACTIVITY task...");
 		deleteTimer();
+		trace(L"DELETED inactivity timer, STARTING inactivity task...");
 		wchar_t cmd[MAX_PATH + 16];
 		const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 		DWORD exit = 0;
 		if (n < MAX_PATH + 16 && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
 			trace(wstring(L"INACTIVITY task finished, exit code=") + std::to_wstring(exit));
-			if (userPresent && monitorOn && !timer)
-				trace(L"... RESTARTING inactivity timer!"),
+			if (userPresent && monitorState != Monitor::Off && !timer)
 				last = ::GetTickCount64(),
-				createTimer((HWND)w);
+				createTimer((HWND)w),
+				trace(L"... RESTARTED inactivity timer!");
 			else
 				trace(L"... NOT RESTARTING inactivity timer!");
 		} else
@@ -572,9 +577,10 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 static auto updateMonitorStatus(const POWERBROADCAST_SETTING* pbs)
 {
 	if (const auto& g = pbs->PowerSetting; g == GUID_CONSOLE_DISPLAY_STATE || g == GUID_MONITOR_POWER_ON || g == GUID_SESSION_DISPLAY_STATUS) {
-		const auto old = monitorOn;
-		monitorOn = *(DWORD*)pbs->Data != 0;
-		return monitorOn != old;
+		const auto old = monitorState;
+		const auto val = *(DWORD*)pbs->Data;
+		monitorState = val == 0 ? Monitor::Off : val == 1 ? Monitor::On : Monitor::Dimmed;
+		return monitorState != old;
 	}
 	return false;
 }
@@ -637,6 +643,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 			break;
 		case BN_CLICKED:
 			if (LOWORD(wp) == (WORD)ControlID::RunNow) {
+				trace(L"TRIGGERING \"manual\" start of inactivity task...");
 				forceRun = true, ::ShowWindow(w, SW_MINIMIZE);
 				return 0;
 			} else if (LOWORD(wp) == (WORD)ControlID::Add || LOWORD(wp) == (WORD)ControlID::Remove) {
@@ -672,16 +679,16 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 			const auto pbs = (const POWERBROADCAST_SETTING*)lp;
 			trace(wstring(L"WM_POWERBROADCAST: ") + powerChange2string(pbs));
 			if (const auto monitorChanged = updateMonitorStatus(pbs), userChanged = updateUserStatus(pbs); monitorChanged || userChanged)
-				if (!timer && monitorChanged && !monitorOn && procInfo.hProcess != nullptr) {
+				if (!timer && monitorChanged && monitorState == Monitor::Off && procInfo.hProcess != nullptr) {
 					if (::TerminateProcess(procInfo.hProcess, 0))
 						trace(L"WM_POWERBROADCAST, monitor off, TERMINATING inactivity task!");
-				} else if (!timer && ((monitorChanged && monitorOn) || (userChanged && userPresent)))
+				} else if (!timer && ((monitorChanged && monitorState != Monitor::Off) || (userChanged && userPresent)))
 					last = ::GetTickCount64(),
 					createTimer(w),
-					trace(L"WM_POWERBROADCAST, monitor/user BACK, RESTARTING inactivity timer!");
-				else if (timer && !monitorOn && !userPresent)
+					trace(L"WM_POWERBROADCAST, monitor/user BACK, RESTARTED inactivity timer!");
+				else if (timer && monitorState == Monitor::Off && !userPresent)
 					deleteTimer(),
-					trace(L"WM_POWERBROADCAST, monitor/user GONE, DELETING inactivity timer!");
+					trace(L"WM_POWERBROADCAST, monitor/user GONE, DELETED inactivity timer!");
 		} else
 			trace(wstring(L"WM_POWERBROADCAST(other): ") + powerMsgOther2string(wp));
 		break;
