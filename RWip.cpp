@@ -43,11 +43,12 @@
 #include <sstream>
 #include <iomanip>
 #include <utility>
+#include <cwchar>
 #include <set>
 #include <unordered_map>
 
 //	UN-comment the following line for tracing with ::OutputDebugString()
-//#define TRACE_ENABLED
+#define TRACE_ENABLED
 
 namespace fs = std::filesystem;
 
@@ -231,14 +232,35 @@ constexpr auto sameSize(const RECT& r1, const RECT& r2) {
 }
 
 /*
+	Detect current foreground app running as "fullscreen" (games, videos, etc).
+*/
+static auto runningFullscreenApp()
+{
+	const auto fW = ::GetForegroundWindow();
+	if (fW == NULL || fW == desktopH || fW == shellH)
+		return false;
+	RECT r;
+	return ::GetWindowRect(fW, &r) ? sameSize(r, desktopR) : false;
+}
+
+/*
 	"Old school" version of optional tracing... now implemented with the CPP
 	(aka the C/C++ Preprocessor), rather than cool new stuff like template meta-
 	programming and constexpr if, as I wanted there to be NO evaluation of exprs
 	at the trace(...) call sites in the "NO trace" mode of operation.
 */
 #ifdef TRACE_ENABLED
-static const wstring traceTag{ L"RWipTRACE> " };
-#define trace(args) ::OutputDebugString((traceTag + args).c_str())
+static auto tracePre()
+{
+	wchar_t b[16];
+	const auto n = swprintf(b, std::size(b), L"RWipTRACE%c%c%c%c> ",
+		runningFullscreenApp() ? L'f' : L'_',
+		timer ? L't' : L'_',
+		userPresent ? L'U' : L'_',
+		monitorOn ? L'M' : L'_');
+	return wstring(b, n);
+}
+#define trace(args) ::OutputDebugStringW((tracePre() + args).c_str())
 #else
 #define trace(args) void(0)
 #endif
@@ -356,18 +378,6 @@ static auto runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 	::WaitForSingleObject(procInfo.hProcess, INFINITE);
 	::GetExitCodeProcess(procInfo.hProcess, &exit);
 	return true;
-}
-
-/*
-	Detect current foreground app running as "fullscreen" (games, videos, etc).
-*/
-static auto runningFullscreenApp()
-{
-	const auto fW = ::GetForegroundWindow();
-	if (fW == NULL || fW == desktopH || fW == shellH)
-		return false;
-	RECT r;
-	return ::GetWindowRect(fW, &r) ? sameSize(r, desktopR) : false;
 }
 
 /*
