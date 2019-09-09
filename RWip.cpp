@@ -70,7 +70,7 @@ enum class ControlID {
 /*
 	Monitor state has 3 cases, so a simple "bool" is inadequate.
 */
-enum class Monitor : std::int8_t { Off, On, Dimmed };
+enum class Monitor : char { Off, On, Dimmed };
 
 /*
 	Template class to help with "lifetime management" of Windows HANDLEs - note
@@ -409,10 +409,10 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 		deleteTimer();
 		trace(L"DELETED inactivity timer, STARTING inactivity task...");
 		wchar_t cmd[MAX_PATH + 16];
-		const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
+		const auto n = ::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 		DWORD exit = 0;
-		if (n < MAX_PATH + 16 && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
+		if ((size_t)n < std::size(cmd) && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
 			trace(wstring(L"INACTIVITY task finished, exit code=") + std::to_wstring(exit));
 			if (userPresent && monitorState != Monitor::Off && !timer)
 				last = ::GetTickCount64(),
@@ -592,7 +592,7 @@ static auto updateUserStatus(const POWERBROADCAST_SETTING* pbs)
 {
 	if (const auto& g = pbs->PowerSetting; g == GUID_SESSION_USER_PRESENCE) {
 		const auto old = userPresent;
-		userPresent = *(DWORD*)pbs->Data == 0;
+		userPresent = *(DWORD*)pbs->Data == 0; // (yes, this value really *is* "inverted")
 		return userPresent != old;
 	}
 	return false;
@@ -648,7 +648,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 				return 0;
 			} else if (LOWORD(wp) == (WORD)ControlID::Add || LOWORD(wp) == (WORD)ControlID::Remove) {
 				wchar_t cmd[MAX_PATH + 16];
-				::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
+				::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
 				if (const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd); LOWORD(wp) == (WORD)ControlID::Add) {
 					if (i == CB_ERR) {
 						// (... only if we DIDN'T find it, i.e., disallow DUPES)
@@ -743,7 +743,7 @@ static auto collectCmdsFromUI()
 static void saveConfig()
 {
 	wchar_t cmd[MAX_PATH + 16];
-	const auto n = ::SendMessage(executableH, WM_GETTEXT, MAX_PATH + 16, (LPARAM)cmd);
+	const auto n = ::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
 	const auto uiCmds = collectCmdsFromUI();
 	const auto propCmds = collectCmdsFromProperties();
 	const auto restrict = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
