@@ -36,6 +36,7 @@
 
 #include <type_traits>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <cwchar>
 #include <filesystem>
@@ -45,7 +46,17 @@
 #include <utility>
 #include <cwchar>
 #include <set>
-#include <unordered_map>
+#include <map>
+
+/*
+	Define "alias templates" so as to use c++14 "is_transparent" comparators.
+*/
+
+template<typename T, typename Cmp = std::less<>>
+using set = std::set<T, Cmp>;
+
+template<typename K, typename T, typename Cmp = std::less<>>
+using map = std::map<K, T, Cmp>;
 
 //	UN-comment the following line for tracing with ::OutputDebugString()
 #define TRACE_ENABLED
@@ -53,6 +64,7 @@
 namespace fs = std::filesystem;
 
 using std::wstring;
+using std::wstring_view;
 using std::endl;
 
 /*
@@ -178,7 +190,7 @@ constexpr std::pair<wchar_t*, unsigned long long> intervals[]{
 /*
 	Config "database" support, including defaults and *primitive* accessor fns.
 */
-static std::unordered_map<wstring, wstring> configDB{
+static map<wstring, wstring> configDB{
 	{ L"cmd", LR"(c:\Windows\System32\Bubbles.scr /s)" },
 	{ L"lib", LR"("c:\\Windows\\System32\\Bubbles.scr /s")" }, // (will be used with std::quoted)
 	{ L"del", L"4" },
@@ -186,17 +198,17 @@ static std::unordered_map<wstring, wstring> configDB{
 };
 
 template<typename T>
-constexpr T getProp(const wstring& name) {
+constexpr T getProp(wstring_view name) {
 	const auto umi = configDB.find(name);
 	return umi != configDB.end() ? umi->second : T();
 }
 template<>
-inline long getProp(const wstring& name) {
+inline long getProp(wstring_view name) {
 	const auto umi = configDB.find(name);
 	return umi != configDB.end() ? wcstol(umi->second.c_str(), nullptr, 10) : 0;
 }
 template<>
-inline bool getProp(const wstring& name) { return getProp<long>(name) != 0; }
+inline bool getProp(wstring_view name) { return getProp<long>(name) != 0; }
 
 static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait);
 
@@ -438,7 +450,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 */
 static auto collectCmdsFromProperties()
 {
-	std::set<wstring> elements;
+	set<wstring> elements;
 	std::wstringstream ss(getProp<wstring>(L"lib"));
 	for (wstring c; ss >> std::quoted(c);)
 		elements.emplace(c);
@@ -725,7 +737,7 @@ static void loadConfig()
 */
 static auto collectCmdsFromUI()
 {
-	std::set<wstring> elements;
+	set<wstring> elements;
 	const auto n = ::SendMessage(executableH, CB_GETCOUNT, 0, 0);
 	for (auto i = 0; i < n; i++) {
 		wchar_t cmd[MAX_PATH + 16];
