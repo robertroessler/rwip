@@ -59,7 +59,7 @@ template<typename K, typename T, typename Cmp = std::less<>>
 using map = std::map<K, T, Cmp>;
 
 //	UN-comment the following line for tracing with ::OutputDebugString()
-#define TRACE_ENABLED
+//#define TRACE_ENABLED
 
 namespace fs = std::filesystem;
 
@@ -256,6 +256,12 @@ static auto runningFullscreenApp()
 	const auto fW = ::GetForegroundWindow();
 	if (fW == NULL || fW == desktopH || fW == shellH)
 		return false;
+	// Heuristic approach to seeing if "real" desktop has focus... cuts way down
+	// on false positives!
+	wchar_t b[16];
+	if (auto n = ::GetClassNameW(fW, b, (int)std::size(b)); n)
+		if (!wcsncmp(b, L"WorkerW", n) || !wcsncmp(b, L"Progman", n))
+			return false;
 	RECT r;
 	return ::GetWindowRect(fW, &r) ? sameSize(r, desktopR) : false;
 }
@@ -267,21 +273,6 @@ static auto runningFullscreenApp()
 	at the trace(...) call sites in the "NO trace" mode of operation.
 */
 #ifdef TRACE_ENABLED
-static auto tracePre()
-{
-	wchar_t b[16];
-	const auto n = swprintf(b, std::size(b), L"RWipTRACE%c%c%c%c> ",
-		runningFullscreenApp() ? L'f' : L'_',
-		timer ? L't' : L'_',
-		userPresent ? L'U' : L'_',
-		monitorState == Monitor::On ? L'M' : monitorState == Monitor::Dimmed ? L'm' : L'_');
-	return wstring(b, n);
-}
-#define trace(args) ::OutputDebugStringW((tracePre() + args).c_str())
-#else
-#define trace(args) void(0)
-#endif
-
 /*
 	Format for display the POWERBROADCAST_SETTING param from a WM_POWERBROADCAST
 	message... note that the "user presence" values use 0 -> PRESENT, 2 -> NOT!
@@ -315,6 +306,25 @@ constexpr const wchar_t* powerMsgOther2string(WPARAM wp)
 			return label;
 	return L"<other power-management event>";
 }
+
+/*
+	Construct trace message prefix including current "state machine" indicators.
+*/
+static auto tracePre()
+{
+	wchar_t b[16];
+	const auto n = swprintf(b, std::size(b), L"RWipTRACE%c%c%c%c> ",
+		runningFullscreenApp() ? L'f' : L'_',
+		timer ? L't' : L'_',
+		userPresent ? L'U' : L'_',
+		monitorState == Monitor::On ? L'M' : monitorState == Monitor::Dimmed ? L'm' : L'_');
+	return wstring(b, n);
+}
+
+#define trace(args) ::OutputDebugStringW((tracePre() + args).c_str())
+#else
+#define trace(args) void(0)
+#endif
 
 /*
 	Create a new [callback] timer, passing the supplied window to the callback.
@@ -423,10 +433,9 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 		wchar_t cmd[MAX_PATH + 16];
 		const auto n = ::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
-		DWORD exit = 0;
-		if ((size_t)n < std::size(cmd) && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
+		if (DWORD exit = 0; (size_t)n < std::size(cmd) && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
 			trace(wstring(L"INACTIVITY task finished, exit code=") + std::to_wstring(exit));
-			if (userPresent && monitorState != Monitor::Off && !timer)
+			if (!timer && userPresent && monitorState == Monitor::On)
 				last = ::GetTickCount64(),
 				createTimer((HWND)w),
 				trace(L"... RESTARTED inactivity timer!");
@@ -604,7 +613,7 @@ static auto updateUserStatus(const POWERBROADCAST_SETTING* pbs)
 {
 	if (const auto& g = pbs->PowerSetting; g == GUID_SESSION_USER_PRESENCE) {
 		const auto old = userPresent;
-		userPresent = *(DWORD*)pbs->Data == 0; // (yes, this value really *is* "inverted")
+		userPresent = *(DWORD*)pbs->Data == 0; // (yes, value *is* "inverted")
 		return userPresent != old;
 	}
 	return false;
@@ -689,16 +698,17 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 	case WM_POWERBROADCAST:
 		if (wp == PBT_POWERSETTINGCHANGE) {
 			const auto pbs = (const POWERBROADCAST_SETTING*)lp;
+			const auto monitorChanged = updateMonitorStatus(pbs), userChanged = updateUserStatus(pbs);
 			trace(wstring(L"WM_POWERBROADCAST: ") + powerChange2string(pbs));
-			if (const auto monitorChanged = updateMonitorStatus(pbs), userChanged = updateUserStatus(pbs); monitorChanged || userChanged)
-				if (!timer && monitorChanged && monitorState == Monitor::Off && procInfo.hProcess != nullptr) {
+			if (monitorChanged || userChanged)
+				if (!timer && monitorChanged && monitorState != Monitor::On && procInfo.hProcess != nullptr) {
 					if (::TerminateProcess(procInfo.hProcess, 0))
 						trace(L"WM_POWERBROADCAST, monitor off, TERMINATING inactivity task!");
-				} else if (!timer && ((monitorChanged && monitorState != Monitor::Off) || (userChanged && userPresent)))
+				} else if (!timer && ((monitorChanged && monitorState == Monitor::On) || (userChanged && userPresent)))
 					last = ::GetTickCount64(),
 					createTimer(w),
 					trace(L"WM_POWERBROADCAST, monitor/user BACK, RESTARTED inactivity timer!");
-				else if (timer && monitorState == Monitor::Off && !userPresent)
+				else if (timer && monitorState != Monitor::On && !userPresent)
 					deleteTimer(),
 					trace(L"WM_POWERBROADCAST, monitor/user GONE, DELETED inactivity timer!");
 		} else
