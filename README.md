@@ -42,9 +42,9 @@ Usage of RWip is simple:
 
 After the first run, your settings will be saved in the following "config" file:
 
-%USERPROFILE%\.rwipconfig
+%USERPROFILE%\\.rwipconfig
 
-(typically in the Windows per-user home directory @ C:\Users\<user-name>)
+(typically in the Windows per-user home directory @ C:\Users\\\<user-name>)
 
 In addition to the explicitly-saved options mentioned above, RWip can now also
 "sign up" to be started with Windows - optionally, of course.  When RWip is told
@@ -83,7 +83,7 @@ start with a blank background... however, the most visually appealing feature of
 "Bubbles.scr" was that it appeared to float numerous translucent and colliding
 bubbles over the top of *your* desktop.
 
-By executing "Bubbles.scr" *not* as a screen saver per se, and just as a normal
+By executing "Bubbles.scr" **not** as a screen saver *per se*, and just as a normal
 app, the old behavior of running "on top of" your desktop is now back.  RWip of
 course does monitor the screen "power state" and the user's "presence" to know
 when it should shut down the chosen executable (usually a screen saver) and in

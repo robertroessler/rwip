@@ -44,7 +44,6 @@
 #include <sstream>
 #include <iomanip>
 #include <utility>
-#include <cwchar>
 #include <set>
 #include <map>
 
@@ -62,6 +61,8 @@ using map = std::map<K, T, Cmp>;
 //#define TRACE_ENABLED
 
 namespace fs = std::filesystem;
+
+using namespace std::string_literals;
 
 using std::wstring;
 using std::wstring_view;
@@ -256,14 +257,15 @@ static auto runningFullscreenApp()
 	const auto fW = ::GetForegroundWindow();
 	if (fW == NULL || fW == desktopH || fW == shellH)
 		return false;
+	if (RECT r; !::GetWindowRect(fW, &r) || !sameSize(r, desktopR))
+		return false;
 	// Heuristic approach to seeing if "real" desktop has focus... cuts way down
 	// on false positives!
-	wchar_t b[16];
-	if (auto n = ::GetClassNameW(fW, b, (int)std::size(b)); n)
-		if (!wcsncmp(b, L"WorkerW", n) || !wcsncmp(b, L"Progman", n))
+	wchar_t b[64];
+	if (const auto n = ::GetClassNameW(fW, b, (int)std::size(b)); n)
+		if (wstring_view v(b, n); v == L"WorkerW" || v == L"Progman")
 			return false;
-	RECT r;
-	return ::GetWindowRect(fW, &r) ? sameSize(r, desktopR) : false;
+	return true;
 }
 
 /*
@@ -277,7 +279,7 @@ static auto runningFullscreenApp()
 	Format for display the POWERBROADCAST_SETTING param from a WM_POWERBROADCAST
 	message... note that the "user presence" values use 0 -> PRESENT, 2 -> NOT!
 */
-static wstring powerChange2string(const POWERBROADCAST_SETTING* pbs)
+static auto powerChange2string(const POWERBROADCAST_SETTING* pbs)
 {
 	auto f = [](GUID g, DWORD d) {
 		constexpr const wchar_t* displayState[]{ L"off", L"on", L"dimmed" };
@@ -292,7 +294,7 @@ static wstring powerChange2string(const POWERBROADCAST_SETTING* pbs)
 	for (const auto& [label, guid] : powerMsgs)
 		if (pbs->PowerSetting == guid)
 			return wstring(label) + L'=' + f(guid, *(DWORD*)pbs->Data);
-	return L"<other power-management GUID>";
+	return L"<other power-management GUID>"s;
 }
 
 /*
@@ -310,7 +312,7 @@ constexpr const wchar_t* powerMsgOther2string(WPARAM wp)
 /*
 	Construct trace message prefix including current "state machine" indicators.
 */
-static auto tracePre()
+static wstring tracePre()
 {
 	wchar_t b[16];
 	const auto n = swprintf(b, std::size(b), L"RWipTRACE%c%c%c%c> ",
@@ -318,7 +320,7 @@ static auto tracePre()
 		timer ? L't' : L'_',
 		userPresent ? L'U' : L'_',
 		monitorState == Monitor::On ? L'M' : monitorState == Monitor::Dimmed ? L'm' : L'_');
-	return wstring(b, n);
+	return { b, (size_t)n };
 }
 
 #define trace(args) ::OutputDebugStringW((tracePre() + args).c_str())
@@ -362,7 +364,7 @@ static auto formatTimeRemaining(wchar_t* buf, size_t n, decltype(last) dT)
 */
 static auto runProcessAndWait(wchar_t* cmd, DWORD& exit)
 {
-	trace(wstring(L"RUN INACTIVITY task => ") + cmd);
+	trace(L"RUN INACTIVITY task => "s + cmd);
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
 	if (!::CreateProcess(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startInfo, &procInfo))
 		return trace(L"*** FAILED CreateProcess"), false;
@@ -379,7 +381,7 @@ static auto runProcessAndWait(wchar_t* cmd, DWORD& exit)
 */
 static auto runRestrictedProcessAndWait(wchar_t* cmd, DWORD& exit)
 {
-	trace(wstring(L"RUN *restricted* INACTIVITY task => ") + cmd);
+	trace(L"RUN *restricted* INACTIVITY task => "s + cmd);
 	SAFER_LEVEL_HANDLE safer{};
 	// set "Safer" level to... "SAFER_LEVELID_CONSTRAINED"
 	// N.B. - maybe SAFER_LEVELID_NORMALUSER if this is too "tight"?
@@ -434,15 +436,18 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 		const auto n = ::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 		if (DWORD exit = 0; (size_t)n < std::size(cmd) && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
-			trace(wstring(L"INACTIVITY task finished, exit code=") + std::to_wstring(exit));
+			trace(L"INACTIVITY task finished, exit code=" + std::to_wstring(exit));
 			if (!timer && userPresent && monitorState == Monitor::On)
 				last = ::GetTickCount64(),
 				createTimer((HWND)w),
 				trace(L"... RESTARTED inactivity timer!");
+			else if (timer)
+				trace(L"... inactivity timer RUNNING!");
 			else
 				trace(L"... NOT RESTARTING inactivity timer!");
 		} else
-			trace(wstring(L"*** FAILURE executing ") + cmd);
+			// N.B. - withoutout tracing, there is no indication of failure here!
+			trace(L"*** FAILURE executing "s + cmd);
 	} else {
 		if (LASTINPUTINFO history{ sizeof(LASTINPUTINFO) }; ::GetLastInputInfo(&history) && history.dwTime > last)
 			last = decltype(last)(history.dwTime), dT = 1; // max time to display will be 59:59
@@ -697,13 +702,13 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 		break;
 	case WM_POWERBROADCAST:
 		if (wp == PBT_POWERSETTINGCHANGE) {
-			const auto pbs = (const POWERBROADCAST_SETTING*)lp;
+			const auto pbs = (POWERBROADCAST_SETTING*)lp;
 			const auto monitorChanged = updateMonitorStatus(pbs), userChanged = updateUserStatus(pbs);
-			trace(wstring(L"WM_POWERBROADCAST: ") + powerChange2string(pbs));
+			trace(L"WM_POWERBROADCAST: " + powerChange2string(pbs));
 			if (monitorChanged || userChanged)
-				if (!timer && monitorChanged && monitorState != Monitor::On && procInfo.hProcess != nullptr) {
+				if (!timer && monitorChanged && monitorState == Monitor::Off && procInfo.hProcess != nullptr) {
 					if (::TerminateProcess(procInfo.hProcess, 0))
-						trace(L"WM_POWERBROADCAST, monitor off, TERMINATING inactivity task!");
+						trace(L"WM_POWERBROADCAST, monitor off, TERMINATED inactivity task!");
 				} else if (!timer && ((monitorChanged && monitorState == Monitor::On) || (userChanged && userPresent)))
 					last = ::GetTickCount64(),
 					createTimer(w),
@@ -712,7 +717,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 					deleteTimer(),
 					trace(L"WM_POWERBROADCAST, monitor/user GONE, DELETED inactivity timer!");
 		} else
-			trace(wstring(L"WM_POWERBROADCAST(other): ") + powerMsgOther2string(wp));
+			trace(L"WM_POWERBROADCAST(other): "s + powerMsgOther2string(wp));
 		break;
 	}
 	return ::DefWindowProc(w, mId, wp, lp); // (go with "default" processing)
@@ -781,7 +786,7 @@ static void saveConfig()
 	const auto startup = ::SendMessage(startWithWindowsH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 	IPersistFilePtr ppf;
 	if (IShellLinkWPtr psl(CLSID_ShellLink); psl && SUCCEEDED(psl.QueryInterface(IID_IPersistFile, &ppf))) {
-		wstring lnkPath = wstring(start_path) + L"/RWip.lnk";
+		auto lnkPath = wstring(start_path) + L"/RWip.lnk";
 		if (const auto shortcutPresent = SUCCEEDED(ppf->Load(lnkPath.c_str(), 0)); startup) {
 			if (!shortcutPresent)
 				// create new "start with Windows" shortcut
