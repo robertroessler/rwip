@@ -12,11 +12,13 @@ for the user to become inactive for a specified period, and then run a chosen
 executable.
 
 Besides the described overt functionality, RWip also serves as an example of how
-simple a [GUI] Windows app can be... with nary a bulky framework, manifest file,
+simple a [GUI] Windows app can be... with nary a bulky framework, ~~manifest file~~
+(all right, an [embedded] Windows manifest file
+*is* useful for UTF-8 support and better-looking controls),
 or DLL in sight, one can create a functional piece of code with a pleasing and
 useful interface - that may be easily extended.
 
-It is written in fairly idiomatic modern C++ 11/14/17, and in addition to the main
+It is written in fairly idiomatic modern C++ 17/20, and in addition to the main
 "inactivity" functionality, also includes "helper" templates and functions that
 can assist with Windows "handle" lifetime management, as well as aiding in the
 layout of windows and controls.
