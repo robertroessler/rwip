@@ -43,6 +43,7 @@
 #include <sstream>
 #include <iomanip>
 #include <utility>
+#include <format>
 #include <set>
 #include <map>
 
@@ -118,8 +119,8 @@ public:
 	~handle() { close(); }				// (no need to be virtual: simplicity!)
 
 	operator HANDLE() const { return h; }
-	template<typename = std::enable_if_t<!std::is_reference_v<T>>>
-	operator PHANDLE() { return &h; }
+	template<typename Dummy = void>
+	operator PHANDLE() requires (!std::is_reference_v<T>) { return &h; }
 	explicit operator bool() const { return h != nullptr; }
 	HANDLE* operator&() { return &h; }
 	HANDLE& operator=(T h_) { return h = h_; }
@@ -147,6 +148,7 @@ public:
 	created by the default OLE allocator.
 */
 template<typename T>
+requires std::is_pointer_v<T>
 class COMTaskMemPtr {
 	T p = nullptr;
 
@@ -204,29 +206,31 @@ constexpr T getProp(string_view name) {
 template<>
 static inline long getProp(string_view name) {
 	const auto umi = configDB.find(name);
-	return umi != configDB.end() ? strtol(umi->second.c_str(), nullptr, 10) : 0;
+	return umi != configDB.end() ? std::stol(umi->second) : 0;
 }
 template<>
-inline bool getProp(string_view name) { return getProp<long>(name) != 0; }
+static inline bool getProp(string_view name) { return getProp<long>(name) != 0; }
 
 static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait);
 
 static handle timer{};
 static auto last = 0ULL;
 
-static HWND desktopH = ::GetDesktopWindow();
+static auto desktopH = ::GetDesktopWindow();
 static RECT desktopR{};
-static HWND shellH = ::GetShellWindow();
+static auto shellH = ::GetShellWindow();
+static auto bgColor = ::GetSysColor(COLOR_3DFACE);
+static auto bgColorBr = ::GetSysColorBrush(COLOR_3DFACE);
 
-static HWND executableH = nullptr;
-static HFONT countdownF = nullptr;
-static HWND countdownH = nullptr;
-static HWND restrictedH = nullptr;
-static HWND startWithWindowsH = nullptr;
-static HWND periodH = nullptr;
-static HWND runNowH = nullptr;
-static WNDPROC oldButtonProc = nullptr;
-static WNDPROC oldListBoxProc = nullptr;
+static HWND executableH{};
+static HFONT countdownF{};
+static HWND countdownH{};
+static HWND restrictedH{};
+static HWND startWithWindowsH{};
+static HWND periodH{};
+static HWND runNowH{};
+static WNDPROC oldButtonProc{};
+static WNDPROC oldListBoxProc{};
 static auto periodId = 0;
 static COMTaskMemPtr<wchar_t*> start_path;
 
@@ -269,7 +273,7 @@ static auto runningFullscreenApp()
 /*
 	"Old school" version of optional tracing... now implemented with the CPP
 	(aka the C/C++ Preprocessor), rather than cool new stuff like template meta-
-	programming and constexpr if, as I wanted there to be NO evaluation of exprs
+	programming and constexpr if, as we want there to be NO evaluation of exprs
 	at the trace(...) call sites in the "NO trace" mode of operation.
 */
 #ifdef TRACE_ENABLED
@@ -313,12 +317,12 @@ constexpr const char* powerMsgOther2string(WPARAM wp)
 static string tracePre()
 {
 	char b[16];
-	const auto n = snprintf(b, std::size(b), "RWipTRACE%c%c%c%c> ",
+	const auto r = std::format_to_n(b, std::size(b), "RWipTRACE{:c}{:c}{:c}{:c}> ",
 		runningFullscreenApp() ? 'f' : '_',
 		timer ? 't' : '_',
 		userPresent ? 'U' : '_',
 		monitorState == Monitor::On ? 'M' : monitorState == Monitor::Dimmed ? 'm' : '_');
-	return { b, (size_t)n };
+	return { b, (size_t)r.size };
 }
 
 #define trace(args) ::OutputDebugString((tracePre() + args).c_str())
@@ -349,10 +353,9 @@ inline void deleteTimer()
 */
 static auto formatTimeRemaining(char* buf, size_t n, decltype(last) dT)
 {
-	const int seconds = int(dT / 1000);
-	const int minutes = int(seconds / 60);
-	const int displaySeconds = seconds % 60;
-	return snprintf(buf, n, "%02d:%02d", minutes, displaySeconds);
+	const auto seconds = int(dT / 1000);
+	const auto r = std::format_to_n(buf, n - 1, "{:02d}:{:02d}", seconds / 60, seconds % 60);
+	return *r.out = '\0', r.size;
 }
 
 /*
@@ -449,7 +452,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 	} else {
 		if (LASTINPUTINFO history{ sizeof(LASTINPUTINFO) }; ::GetLastInputInfo(&history) && history.dwTime > last)
 			last = decltype(last)(history.dwTime), dT = 1; // max time to display will be 59:59
-		if (WINDOWPLACEMENT wP{ sizeof(WINDOWINFO) }; ::GetWindowPlacement((HWND)w, &wP) && wP.showCmd != SW_SHOWMINIMIZED) {
+		if (WINDOWPLACEMENT wP{sizeof(WINDOWINFO)}; ::GetWindowPlacement((HWND)w, &wP) && wP.showCmd != SW_SHOWMINIMIZED) {
 			char buf[16];
 			formatTimeRemaining(buf, std::size(buf), period - dT);
 			::SetWindowText(countdownH, buf);
@@ -495,13 +498,13 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 
 	::CreateWindow("BUTTON",
 		"+",
-		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
+		WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
 		Bw, Bh, Ch, Ch,
 		w, (HMENU)ControlID::Add, cs->hInstance, nullptr);
 
 	::CreateWindow("BUTTON",
 		"--",
-		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
+		WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
 		Rw - Bw - Ch, Bh, Ch, Ch,
 		w, (HMENU)ControlID::Remove, cs->hInstance, nullptr);
 
@@ -557,7 +560,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 
 	runNowH = ::CreateWindow("BUTTON",
 		"Begin Inactivity Proxy Task NOW",
-		WS_CHILD | WS_VISIBLE | WS_BORDER | BS_DEFPUSHBUTTON,
+		WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
 		Bw, Rh - Bh - Ch, Rw - Bw * 2, Ch,
 		w, (HMENU)ControlID::RunNow, cs->hInstance, nullptr);
 	oldButtonProc = (WNDPROC)::SetWindowLongPtr(runNowH, GWLP_WNDPROC,
@@ -650,12 +653,6 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 	case WM_CREATE:
 		createChildren(w, (CREATESTRUCT*)lp);
 		return 0;
-	case WM_ACTIVATE:
-		if (wp != WA_INACTIVE) {
-			::SetFocus(runNowH);
-			return 0;
-		}
-		break;
 	case WM_COMMAND:
 		switch (HIWORD(wp)) {
 		case CBN_SELCHANGE:
@@ -688,14 +685,12 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 				}
 				return 0;
 			}
-			break;
 		}
 		break;
 	case WM_CTLCOLORSTATIC:
 		if ((HWND)lp == restrictedH || (HWND)lp == startWithWindowsH) {
-			::SetBkMode((HDC)wp, TRANSPARENT);
-			::SetTextColor((HDC)wp, ::GetSysColor(COLOR_BTNTEXT));
-			return (LRESULT)::GetStockObject(NULL_BRUSH);
+			::SetBkColor((HDC)wp, bgColor);
+			return (LRESULT)bgColorBr;
 		}
 		break;
 	case WM_POWERBROADCAST:
@@ -812,8 +807,8 @@ static void saveConfig()
 */
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
-	WNDCLASS wC{ 0, wndProc, 0, 0, inst, nullptr, nullptr, HBRUSH(COLOR_BACKGROUND), nullptr, "RWipClass" };
-	COMInitialize init(COINIT_APARTMENTTHREADED);
+	WNDCLASS wC{ 0, wndProc, 0, 0, inst, nullptr, nullptr, bgColorBr, nullptr, "RWipClass" };
+	COMInitialize init(COINIT_APARTMENTTHREADED);	
 	::SHGetKnownFolderPath(FOLDERID_Startup, 0, nullptr, &start_path);
 	const ATOM wA = ::RegisterClass(&wC);
 	if (!wA)
