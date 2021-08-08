@@ -89,6 +89,8 @@ enum class Monitor : char { Off, On, Dimmed };
 	that either "direct" use with HANDLEs is supported, OR we can "inherit" an
 	already-opened handle by instantiating the template with a HANDLE&.
 
+	N.B.: for HANDLE&, the "address-of" and "assignment" operators are removed.
+
 	Typically, just declare and initialize with something like
 
 	handle<HANDLE> hWnd{};				// explicit "wrapped" handle
@@ -110,6 +112,7 @@ enum class Monitor : char { Off, On, Dimmed };
 	* casting to bool explicitly or implicitly works, returning true if non-NULL
 */
 template<typename T = HANDLE>
+requires std::is_pointer_v<std::remove_cvref_t<T>>
 class handle {
 	T h;
 
@@ -118,16 +121,18 @@ public:
 	handle(T h) : h(h) {}				// (with either a HANDLE or HANDLE&...)
 	~handle() { close(); }				// (no need to be virtual: simplicity!)
 
-	operator HANDLE() const { return h; }
+	operator std::remove_cvref_t<T>() const { return h; }
 	template<typename Dummy = void>
-	operator PHANDLE() requires (!std::is_reference_v<T>) { return &h; }
+	std::remove_cvref_t<T>* operator&() requires (!std::is_reference_v<T>) { return &h; }
+	template<typename Dummy = void>
+	std::remove_cvref_t<T>& operator=(T h_) requires (!std::is_reference_v<T>) { return h = h_; }
 	explicit operator bool() const { return h != nullptr; }
-	HANDLE* operator&() { return &h; }
-	HANDLE& operator=(T h_) { return h = h_; }
+
 	void close() { if (*this) ::CloseHandle(h), h = nullptr; }
 };
 
 template<typename T>
+requires std::is_pointer_v<T>
 class handle_ref : public handle<T&> {
 public:
 	handle_ref() = delete;				// (be clear we INSIST on initializing)
@@ -389,7 +394,7 @@ static auto runRestrictedProcessAndWait(char* cmd, DWORD& exit)
 	if (!::SaferCreateLevel(SAFER_SCOPEID_USER, SAFER_LEVELID_CONSTRAINED, SAFER_LEVEL_OPEN, &safer, nullptr))
 		return false;
 	handle restricted{};
-	if (!::SaferComputeTokenFromLevel(safer, nullptr, restricted, SAFER_TOKEN_NULL_IF_EQUAL, nullptr) || !restricted)
+	if (!::SaferComputeTokenFromLevel(safer, nullptr, &restricted, SAFER_TOKEN_NULL_IF_EQUAL, nullptr) || !restricted)
 		return trace("*** FAILED SaferComputeTokenFromLevel"), ::SaferCloseLevel(safer), false;
 	::SaferCloseLevel(safer);
 	// set [new] process integrity... to "Low Mandatory Level"
