@@ -57,8 +57,8 @@ using set = std::set<T, Cmp>;
 template<typename K, typename T, typename Cmp = std::less<>>
 using map = std::map<K, T, Cmp>;
 
-//	UN-comment the following line for tracing with ::OutputDebugString()
-//#define TRACE_ENABLED
+// (change the following line to true for tracing with ::OutputDebugStringA())
+constexpr auto trace_enabled = false;
 
 namespace fs = std::filesystem;
 
@@ -276,64 +276,76 @@ static auto runningFullscreenApp()
 }
 
 /*
-	"Old school" version of optional tracing... now implemented with the CPP
-	(aka the C/C++ Preprocessor), rather than cool new stuff like template meta-
+	"New school" version of optional tracing... now implemented without the CPP
+	(aka the C/C++ Preprocessor), while using cool new stuff like template meta-
 	programming and constexpr if, as we want there to be NO evaluation of exprs
 	at the trace(...) call sites in the "NO trace" mode of operation.
 */
-#ifdef TRACE_ENABLED
+
 /*
 	Format for display the POWERBROADCAST_SETTING param from a WM_POWERBROADCAST
 	message... note that the "user presence" values use 0 -> PRESENT, 2 -> NOT!
 */
-static auto powerChange2string(const POWERBROADCAST_SETTING* pbs)
+constexpr auto powerChange2string(const POWERBROADCAST_SETTING* pbs)
 {
-	auto f = [](GUID g, DWORD d) {
-		constexpr const char* displayState[]{ "off", "on", "dimmed" };
-		constexpr const char* userPresence[]{ "present", "", "inactive" };
-		if (g == GUID_CONSOLE_DISPLAY_STATE || g == GUID_SESSION_DISPLAY_STATUS)
-			return displayState[d];
-		else if (g == GUID_SESSION_USER_PRESENCE)
-			return userPresence[d];
-		return ""; // ("shouldn't happen")
-	};
-	// (N.B. - the Data member will be a DWORD whenever ...->Data is evaluated!)
-	for (const auto& [label, guid] : powerMsgs)
-		if (pbs->PowerSetting == guid)
-			return string(label) + '=' + f(guid, *(DWORD*)pbs->Data);
-	return "<other power-management GUID>"s;
+	if constexpr (trace_enabled) {
+		auto f = [](GUID g, DWORD d) {
+			constexpr const char* displayState[]{ "off", "on", "dimmed" };
+			constexpr const char* userPresence[]{ "present", "", "inactive" };
+			if (g == GUID_CONSOLE_DISPLAY_STATE || g == GUID_SESSION_DISPLAY_STATUS)
+				return displayState[d];
+			else if (g == GUID_SESSION_USER_PRESENCE)
+				return userPresence[d];
+			return ""; // ("shouldn't happen")
+		};
+		// (N.B. - the Data member will be a DWORD whenever ...->Data is evaluated!)
+		for (const auto& [label, guid] : powerMsgs)
+			if (pbs->PowerSetting == guid)
+				return std::format("{}={}", label, f(guid, *(DWORD*)pbs->Data));
+		return "<other power-management GUID>"s;
+	}
+	else return nullptr;
 }
 
 /*
 	Format for display the older, non-POWERBROADCAST_SETTING param variant of a
 	WM_POWERBROADCAST message.
 */
-constexpr const char* powerMsgOther2string(WPARAM wp)
+constexpr auto powerMsgOther2string(WPARAM wp)
 {
-	for (const auto& [label, msg] : powerMsgsOther)
-		if (wp == msg)
-			return label;
-	return "<other power-management event>";
+	if constexpr (trace_enabled) {
+		for (const auto& [label, msg] : powerMsgsOther)
+			if (wp == msg)
+				return label;
+		return "<other power-management event>";
+	}
+	else return nullptr;
 }
 
 /*
 	Construct trace message prefix including current "state machine" indicators.
 */
-static string tracePre()
+static auto tracePre(char* b, size_t n)
 {
-	char b[16];
-	const auto r = std::format_to_n(b, std::size(b), "RWipTRACE{:c}{:c}{:c}{:c}> ",
-		runningFullscreenApp() ? 'f' : '_',
-		timer ? 't' : '_',
-		userPresent ? 'U' : '_',
-		monitorState == Monitor::On ? 'M' : monitorState == Monitor::Dimmed ? 'm' : '_');
-	return { b, (size_t)r.size };
+	if constexpr (trace_enabled) {
+		const auto r = std::format_to_n(b, n, "RWipTRACE{:c}{:c}{:c}{:c}> ",
+			runningFullscreenApp() ? 'f' : '_',
+			timer ? 't' : '_',
+			userPresent ? 'U' : '_',
+			monitorState == Monitor::On ? 'M' : monitorState == Monitor::Dimmed ? 'm' : '_');
+		return string_view(b, r.size);
+	}
 }
 
-#define trace(args) ::OutputDebugString((tracePre() + args).c_str())
-#else
-#define trace(args) void(0)
-#endif
+template<typename... ARGS>
+static void trace(const ARGS&... args)
+{
+	if constexpr (trace_enabled) {
+		string_view fmt{ "{}{}{}{}{}{}{}{}", (min(sizeof...(ARGS), 7) + 1) * 2 };
+		char b[32];
+		::OutputDebugStringA(std::format(fmt, tracePre(b, std::size(b)), args...).c_str());
+	}
+}
 
 /*
 	Create a new [callback] timer, passing the supplied window to the callback.
@@ -370,7 +382,7 @@ static auto formatTimeRemaining(char* buf, size_t n, decltype(last) dT)
 */
 static auto runProcessAndWait(char* cmd, DWORD& exit)
 {
-	trace("RUN INACTIVITY task => "s + cmd);
+	trace("RUN INACTIVITY task => ", cmd);
 	STARTUPINFO startInfo{ sizeof(STARTUPINFO), 0 };
 	if (!::CreateProcess(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startInfo, &procInfo))
 		return trace("*** FAILED CreateProcess"), false;
@@ -387,7 +399,7 @@ static auto runProcessAndWait(char* cmd, DWORD& exit)
 */
 static auto runRestrictedProcessAndWait(char* cmd, DWORD& exit)
 {
-	trace("RUN *restricted* INACTIVITY task => "s + cmd);
+	trace("RUN *restricted* INACTIVITY task => ", cmd);
 	SAFER_LEVEL_HANDLE safer{};
 	// set "Safer" level to... "SAFER_LEVELID_CONSTRAINED"
 	// N.B. - maybe SAFER_LEVELID_NORMALUSER if this is too "tight"?
@@ -442,7 +454,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 		const auto n = ::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 		if (DWORD exit = 0; (size_t)n < std::size(cmd) && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
-			trace("INACTIVITY task finished, exit code=" + std::to_string(exit));
+			trace("INACTIVITY task finished, exit code => ", exit);
 			if (!timer && userPresent && monitorState == Monitor::On)
 				last = ::GetTickCount64(),
 				createTimer((HWND)w),
@@ -453,7 +465,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 				trace("... NOT RESTARTING inactivity timer!");
 		} else
 			// N.B. - withoutout tracing, there is no indication of failure here!
-			trace("*** FAILURE executing "s + cmd);
+			trace("*** FAILURE executing ", cmd);
 	} else {
 		if (LASTINPUTINFO history{ sizeof(LASTINPUTINFO) }; ::GetLastInputInfo(&history) && history.dwTime > last)
 			last = decltype(last)(history.dwTime), dT = 1; // max time to display will be 59:59
@@ -702,7 +714,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 		if (wp == PBT_POWERSETTINGCHANGE) {
 			const auto pbs = (POWERBROADCAST_SETTING*)lp;
 			const auto monitorChanged = updateMonitorStatus(pbs), userChanged = updateUserStatus(pbs);
-			trace("WM_POWERBROADCAST: " + powerChange2string(pbs));
+			trace("WM_POWERBROADCAST: ", powerChange2string(pbs));
 			if (monitorChanged || userChanged)
 				if (!timer && monitorChanged && monitorState == Monitor::Off && procInfo.hProcess != nullptr) {
 					if (::TerminateProcess(procInfo.hProcess, 0))
@@ -715,7 +727,7 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 					deleteTimer(),
 					trace("WM_POWERBROADCAST, monitor/user GONE, DELETED inactivity timer!");
 		} else
-			trace("WM_POWERBROADCAST(other): "s + powerMsgOther2string(wp));
+			trace("WM_POWERBROADCAST(other): ", powerMsgOther2string(wp));
 		break;
 	}
 	return ::DefWindowProc(w, mId, wp, lp); // (go with "default" processing)
