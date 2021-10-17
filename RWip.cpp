@@ -328,7 +328,7 @@ constexpr auto powerMsgOther2string(WPARAM wp)
 static auto tracePre(char* b, size_t n)
 {
 	if constexpr (trace_enabled) {
-		const auto r = std::format_to_n(b, n, "RWipTRACE{:c}{:c}{:c}{:c}> ",
+		const auto r = std::format_to_n(b, n, "RxTRACE{:c}{:c}{:c}{:c}> ",
 			runningFullscreenApp() ? 'f' : '_',
 			timer ? 't' : '_',
 			userPresent ? 'U' : '_',
@@ -485,7 +485,7 @@ static auto collectCmdsFromProperties()
 	set<string> elements;
 	std::stringstream ss(getProp<string>("lib"));
 	for (string c; ss >> std::quoted(c);)
-		elements.emplace(c);
+		elements.emplace(std::move(c));
 	return elements;
 }
 
@@ -754,7 +754,7 @@ static void loadConfig()
 	std::ifstream ls(configpath());
 	for (string line; std::getline(ls, line), ls.is_open() && !ls.eof();)
 		if (line.length() >= 4 && line[3] == '=')
-			configDB[line.substr(0, 3)] = line.substr(4);
+			configDB[std::move(line.substr(0, 3))] = std::move(line.substr(4));
 }
 
 /*
