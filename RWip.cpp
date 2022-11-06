@@ -1,7 +1,7 @@
 /*
 	RWip.cpp - Windows Inactivity Proxy (a small but useful Windows app)
 
-	Copyright(c) 2016-2022, Robert Roessler
+	Copyright(c) 2016-2021, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -304,7 +304,7 @@ constexpr auto powerChange2string(const POWERBROADCAST_SETTING* pbs)
 				return std::format("{}={}", label, f(guid, *(DWORD*)pbs->Data));
 		return "<other power-management GUID>"s;
 	}
-	else return "";
+	else return nullptr;
 }
 
 /*
@@ -319,25 +319,31 @@ constexpr auto powerMsgOther2string(WPARAM wp)
 				return label;
 		return "<other power-management event>";
 	}
-	else return "";
+	else return nullptr;
+}
+
+/*
+	Construct trace message prefix including current "state machine" indicators.
+*/
+static auto tracePre(char* b, size_t n)
+{
+	if constexpr (trace_enabled) {
+		const auto r = std::format_to_n(b, n, "RxTRACE{:c}{:c}{:c}{:c}> ",
+			runningFullscreenApp() ? 'f' : '_',
+			timer ? 't' : '_',
+			userPresent ? 'U' : '_',
+			monitorState == Monitor::On ? 'M' : monitorState == Monitor::Dimmed ? 'm' : '_');
+		return string_view(b, r.size);
+	}
 }
 
 template<typename... ARGS>
 static void trace(const ARGS&... args)
 {
 	if constexpr (trace_enabled) {
-		// construct trace message prefix including current "state machine" indicators
-		auto tracePre = [](auto b, auto n) -> string_view {
-			const auto r = std::format_to_n(b, n, "RxTRACE{:c}{:c}{:c}{:c}> ",
-				runningFullscreenApp() ? 'f' : '_',
-				timer ? 't' : '_',
-				userPresent ? 'U' : '_',
-				monitorState == Monitor::On ? 'M' : monitorState == Monitor::Dimmed ? 'm' : '_');
-			return { b, r.out };
-		};
-		const string_view fmt{ "{}{}{}{}{}{}{}{}", (min(sizeof...(ARGS), 7) + 1) * 2 };
+		string_view fmt{ "{}{}{}{}{}{}{}{}", (min(sizeof...(ARGS), 7) + 1) * 2 };
 		char b[32];
-		::OutputDebugStringA(std::vformat(fmt, std::make_format_args(tracePre(b, std::size(b)), args...)).c_str());
+		::OutputDebugStringA(std::format(fmt, tracePre(b, std::size(b)), args...).c_str());
 	}
 }
 
@@ -458,7 +464,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 			else
 				trace("... NOT RESTARTING inactivity timer!");
 		} else
-			// N.B. - without tracing, there is no indication of failure here!
+			// N.B. - withoutout tracing, there is no indication of failure here!
 			trace("*** FAILURE executing ", cmd);
 	} else {
 		if (LASTINPUTINFO history{ sizeof(LASTINPUTINFO) }; ::GetLastInputInfo(&history) && history.dwTime > last)
@@ -827,7 +833,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	::GetWindowRect(desktopH, &desktopR);
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		"RWip 1.7.1 - Windows Inactivity Proxy",
+		"RWip 1.7 - Windows Inactivity Proxy",
 		WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 280, 0, 0, inst, nullptr);
 	if (wH == nullptr)
