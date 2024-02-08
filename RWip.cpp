@@ -1,7 +1,7 @@
 /*
 	RWip.cpp - Windows Inactivity Proxy (a small but useful Windows app)
 
-	Copyright(c) 2016-2022, Robert Roessler
+	Copyright(c) 2016-2023, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -204,17 +204,17 @@ static map<string, string> configDB{
 };
 
 template<typename T>
-constexpr T getProp(string_view name) {
+inline constexpr T getProp(string_view name) {
 	const auto umi = configDB.find(name);
 	return umi != configDB.end() ? umi->second : T();
 }
 template<>
-static inline long getProp(string_view name) {
+inline long getProp(string_view name) {
 	const auto umi = configDB.find(name);
 	return umi != configDB.end() ? std::stol(umi->second) : 0;
 }
 template<>
-static inline bool getProp(string_view name) { return getProp<long>(name) != 0; }
+inline bool getProp(string_view name) { return getProp<long>(name) != 0; }
 
 static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait);
 
@@ -286,7 +286,7 @@ static auto runningFullscreenApp()
 	Format for display the POWERBROADCAST_SETTING param from a WM_POWERBROADCAST
 	message... note that the "user presence" values use 0 -> PRESENT, 2 -> NOT!
 */
-constexpr auto powerChange2string(const POWERBROADCAST_SETTING* pbs)
+static constexpr auto powerChange2string(const POWERBROADCAST_SETTING* pbs)
 {
 	if constexpr (trace_enabled) {
 		auto f = [](GUID g, DWORD d) {
@@ -311,7 +311,7 @@ constexpr auto powerChange2string(const POWERBROADCAST_SETTING* pbs)
 	Format for display the older, non-POWERBROADCAST_SETTING param variant of a
 	WM_POWERBROADCAST message.
 */
-constexpr auto powerMsgOther2string(WPARAM wp)
+static constexpr auto powerMsgOther2string(WPARAM wp)
 {
 	if constexpr (trace_enabled) {
 		for (const auto& [label, msg] : powerMsgsOther)
@@ -328,11 +328,11 @@ static void trace(const ARGS&... args)
 	if constexpr (trace_enabled) {
 		// construct trace message prefix including current "state machine" indicators
 		auto tracePre = [](auto b, auto n) -> string_view {
-		const auto r = std::format_to_n(b, n, "RxTRACE{:c}{:c}{:c}{:c}> ",
-			runningFullscreenApp() ? 'f' : '_',
-			timer ? 't' : '_',
-			userPresent ? 'U' : '_',
-			monitorState == Monitor::On ? 'M' : monitorState == Monitor::Dimmed ? 'm' : '_');
+			const auto r = std::format_to_n(b, n, "RxTRACE{:c}{:c}{:c}{:c}> ",
+				runningFullscreenApp() ? 'f' : '_',
+				timer ? 't' : '_',
+				userPresent ? 'U' : '_',
+				monitorState == Monitor::On ? 'M' : monitorState == Monitor::Dimmed ? 'm' : '_');
 			return { b, r.out };
 		};
 		const string_view fmt{ "{}{}{}{}{}{}{}{}", (min(sizeof...(ARGS), 7) + 1) * 2 };
@@ -733,9 +733,8 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 */
 static auto configpath()
 {
-	char path[MAX_PATH];
-	const auto n = ::GetEnvironmentVariable("USERPROFILE", path, MAX_PATH);
-	return (n == 0 || n >= MAX_PATH ? fs::current_path() : fs::path(path)) / ".rwipconfig";
+	const auto path{ std::getenv("USERPROFILE") };
+	return (!!path ? fs::path(path) : fs::current_path()) / ".rwipconfig";
 }
 
 /*
@@ -827,7 +826,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	::GetWindowRect(desktopH, &desktopR);
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		"RWip 1.7.1 - Windows Inactivity Proxy",
+		"RWip 1.7.2 - Windows Inactivity Proxy",
 		WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 280, 0, 0, inst, nullptr);
 	if (wH == nullptr)
