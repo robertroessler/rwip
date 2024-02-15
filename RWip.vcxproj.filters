@@ -24,4 +24,12 @@
       <Filter>Resource Files</Filter>
     </Xml>
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="rmj.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="variant.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
 </Project>

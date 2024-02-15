@@ -1,7 +1,7 @@
 /*
 	RWip.cpp - Windows Inactivity Proxy (a small but useful Windows app)
 
-	Copyright(c) 2016-2023, Robert Roessler
+	Copyright(c) 2016-2024, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -45,7 +45,10 @@
 #include <utility>
 #include <format>
 #include <set>
-#include <map>
+#include "rmj.h"
+
+namespace fs = std::filesystem;
+using namespace rmj;
 
 /*
 	Define "alias templates" so as to use c++14 "is_transparent" comparators.
@@ -53,9 +56,6 @@
 
 template<typename T, typename Cmp = std::less<>>
 using set = std::set<T, Cmp>;
-
-template<typename K, typename T, typename Cmp = std::less<>>
-using map = std::map<K, T, Cmp>;
 
 // (change the following line to true for tracing with ::OutputDebugStringA())
 constexpr auto trace_enabled = false;
@@ -194,27 +194,17 @@ static constexpr std::pair<const char*, unsigned long long> intervals[]{
 };
 
 /*
-	Config "database" support, including defaults and *primitive* accessor fns.
+	Config "database" support, including defaults.
 */
-static map<string, string> configDB{
-	{ "cmd", R"(c:\Windows\System32\Bubbles.scr /s)" },
-	{ "lib", R"("c:\\Windows\\System32\\Bubbles.scr /s")" }, // (will be used with std::quoted)
-	{ "del", "4" },
-	{ "run", "1" }
+static rmj::js_val configDB{};
+static const string default_conf{
+	R"({
+		"cmd" : "c:\\Windows\\System32\\Bubbles.scr /s",
+		"lib" : [ "c:\\Windows\\System32\\Bubbles.scr /s" ],
+		"del" : 4,
+		"run" : true
+	})"
 };
-
-template<typename T>
-inline constexpr T getProp(string_view name) {
-	const auto umi = configDB.find(name);
-	return umi != configDB.end() ? umi->second : T();
-}
-template<>
-inline long getProp(string_view name) {
-	const auto umi = configDB.find(name);
-	return umi != configDB.end() ? std::stol(umi->second) : 0;
-}
-template<>
-inline bool getProp(string_view name) { return getProp<long>(name) != 0; }
 
 static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait);
 
@@ -243,6 +233,7 @@ static auto monitorState = Monitor::On;
 static auto userPresent = true;
 static auto quitting = false;
 static auto forceRun = false;
+static auto forceConfUpdate = false;
 
 //	SCALED (x100) and ROUNDED % => pixels
 constexpr auto pc2px(long long w, int pc) { return (int)(w * pc / 10000e0 + ((w > 0) ? 0.5e0 : -0.5e0)); }
@@ -463,7 +454,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 	} else {
 		if (LASTINPUTINFO history{ sizeof(LASTINPUTINFO) }; ::GetLastInputInfo(&history) && history.dwTime > last)
 			last = decltype(last)(history.dwTime), dT = 1; // max time to display will be 59:59
-		if (WINDOWPLACEMENT wP{sizeof(WINDOWINFO)}; ::GetWindowPlacement((HWND)w, &wP) && wP.showCmd != SW_SHOWMINIMIZED) {
+		if (WINDOWPLACEMENT wP{ sizeof(WINDOWINFO) }; ::GetWindowPlacement((HWND)w, &wP) && wP.showCmd != SW_SHOWMINIMIZED) {
 			char buf[16];
 			formatTimeRemaining(buf, std::size(buf), period - dT);
 			::SetWindowText(countdownH, buf);
@@ -477,9 +468,8 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 static auto collectCmdsFromProperties()
 {
 	set<string> elements;
-	std::stringstream ss(getProp<string>("lib"));
-	for (string c; ss >> std::quoted(c);)
-		elements.emplace(std::move(c));
+	for (auto& c : configDB["lib"].as_arr())
+		elements.emplace(c.as_string());
 	return elements;
 }
 
@@ -505,7 +495,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		w, (HMENU)ControlID::Executable, cs->hInstance, nullptr);
 	for (const auto& c : collectCmdsFromProperties())
 		::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)c.c_str());
-	::SetWindowText(executableH, getProp<string>("cmd").c_str());
+	::SetWindowText(executableH, configDB["cmd"].as_string().c_str());
 
 	::CreateWindow("BUTTON",
 		"+",
@@ -526,7 +516,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		w, (HMENU)ControlID::Period, cs->hInstance, nullptr);
 	for (const auto& [label, _] : intervals)
 		::SendMessage(periodH, CB_ADDSTRING, 0, (LPARAM)label);
-	::SendMessage(periodH, CB_SETCURSEL, periodId = getProp<long>("del"), 0);
+	::SendMessage(periodH, CB_SETCURSEL, periodId = (long)configDB["del"].as_num(), 0);
 
 	if (COMBOBOXINFO cbI{ sizeof(COMBOBOXINFO), 0 }; ::SendMessage(periodH, CB_GETCOMBOBOXINFO, 0, (LPARAM)&cbI))
 		oldListBoxProc = (WNDPROC)::SetWindowLongPtr(cbI.hwndList, GWLP_WNDPROC,
@@ -556,7 +546,7 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 		WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_MULTILINE,
 		Bw, Bh * 2 + Ch * 2, pc2px(Rw, 4250), Ch * 2 - Bh / 2,
 		w, (HMENU)ControlID::Restricted, cs->hInstance, nullptr);
-	::SendMessage(restrictedH, BM_SETCHECK, getProp<bool>("run") ? BST_CHECKED : BST_UNCHECKED, 0);
+	::SendMessage(restrictedH, BM_SETCHECK, configDB["run"].as_bool() ? BST_CHECKED : BST_UNCHECKED, 0);
 
 	startWithWindowsH = ::CreateWindow("BUTTON",
 		"Start with Windows",
@@ -744,10 +734,47 @@ static auto configpath()
 */
 static void loadConfig()
 {
-	std::ifstream ls(configpath());
-	for (string line; std::getline(ls, line), ls.is_open() && !ls.eof();)
-		if (line.length() >= 4 && line[3] == '=')
-			configDB[std::move(line.substr(0, 3))] = std::move(line.substr(4));
+	auto string_from_path = [](auto path) {
+		string t;
+		if (std::ifstream f(path, std::ios::binary); f.is_open()) {
+			const auto n{ fs::file_size(path) };
+			t.resize((size_t)n);
+			f.read(t.data(), n);
+		}
+		return t;
+	};
+	auto load_old_format = [](auto path) {
+		auto parse_old_libs = [](auto lib) {
+			js_arr elements;
+			std::stringstream ss(lib);
+			for (string c; ss >> std::quoted(c);)
+				elements.emplace_back(std::move(c));
+			return elements;
+		};
+		js_val config = js_obj();
+		std::ifstream ls(path);
+		for (string line; std::getline(ls, line), ls.is_open() && !ls.eof();)
+			if (line.length() >= 4 && line[3] == '=') {
+				if (line.substr(0, 3) == "cmd")
+					config["cmd"] = line.substr(4);
+				else if (line.substr(0, 3) == "lib")
+					config["lib"] = parse_old_libs(line.substr(4));
+				else if (line.substr(0, 3) == "del")
+					config["del"] = std::stol(line.substr(4));
+				else if (line.substr(0, 3) == "run")
+					config["run"] = std::stol(line.substr(4)) != 0;
+			}
+		return config;
+	};
+	const auto path{ configpath() };
+	const auto conf{ string_from_path(path) };
+	if (conf.empty())
+		configDB = js_val::parse(default_conf), forceConfUpdate = true;
+	else if (conf[0] == '{')
+		configDB = js_val::parse(conf);
+	else
+		// (yes, we are re-reading the file... but typically only ONCE)
+		configDB = load_old_format(path), forceConfUpdate = true;
 }
 
 /*
@@ -772,19 +799,24 @@ static auto collectCmdsFromUI()
 */
 static void saveConfig()
 {
+	auto string_to_path = [](auto t, auto path) {
+		if (std::ofstream f(path, std::ios::trunc | std::ios::binary); f.is_open())
+			f.write(t.data(), t.size());
+	};
 	char cmd[MAX_PATH + 16];
 	const auto n = ::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
 	const auto uiCmds = collectCmdsFromUI();
 	const auto propCmds = collectCmdsFromProperties();
 	const auto restrict = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
-	if (getProp<string>("cmd") != cmd || propCmds != uiCmds ||
-		getProp<long>("del") != periodId ||
-		getProp<bool>("run") != restrict) {
-		std::ofstream ss(configpath(), std::ios::out);
-		ss << "cmd=" << cmd << endl;
-		ss << "lib="; for (const auto& c : uiCmds) ss << std::quoted(c) << ' '; ss << endl;
-		ss << "del=" << periodId << endl;
-		ss << "run=" << restrict << endl;
+	if (forceConfUpdate ||
+		configDB["cmd"].as_string() != cmd || propCmds != uiCmds ||
+		configDB["del"].as_num() != periodId ||
+		configDB["run"].as_bool() != restrict) {
+		configDB["cmd"] = string{ cmd, (size_t)n };
+		configDB["lib"] = js_arr{ uiCmds.cbegin(), uiCmds.cend() };
+		configDB["del"] = periodId;
+		configDB["run"] = restrict;
+		string_to_path(configDB.to_string(), configpath());
 	}
 	const auto startup = ::SendMessage(startWithWindowsH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 	IPersistFilePtr ppf;
@@ -826,7 +858,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	::GetWindowRect(desktopH, &desktopR);
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		"RWip 1.7.2 - Windows Inactivity Proxy",
+		"RWip 1.8 - Windows Inactivity Proxy",
 		WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 280, 0, 0, inst, nullptr);
 	if (wH == nullptr)
