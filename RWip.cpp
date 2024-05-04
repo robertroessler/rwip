@@ -743,7 +743,7 @@ static void loadConfig()
 		}
 		return t;
 	};
-	auto load_old_format = [](auto path) {
+	auto load_old_format = [](auto conf) {
 		auto parse_old_libs = [](auto lib) {
 			js_arr elements;
 			std::stringstream ss(lib);
@@ -752,8 +752,8 @@ static void loadConfig()
 			return elements;
 		};
 		js_val config = js_obj();
-		std::ifstream ls(path);
-		for (string line; std::getline(ls, line), ls.is_open() && !ls.eof();)
+		std::stringstream ls(conf);
+		for (string line; std::getline(ls, line), !ls.eof();)
 			if (line.length() >= 4 && line[3] == '=') {
 				if (line.substr(0, 3) == "cmd")
 					config["cmd"] = line.substr(4);
@@ -773,8 +773,7 @@ static void loadConfig()
 	else if (conf[0] == '{')
 		configDB = js_val::parse(conf);
 	else
-		// (yes, we are re-reading the file... but typically only ONCE)
-		configDB = load_old_format(path), forceConfUpdate = true;
+		configDB = load_old_format(conf), forceConfUpdate = true;
 }
 
 /*
