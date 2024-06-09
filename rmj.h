@@ -375,9 +375,9 @@ public:
 		};
 		// return external form of JSON "value"
 		return std::visit(overload{
-			[&](const nullptr_t&) { return "null"s; },
-			[&](const bool&) { return as_bool() ? "true"s : "false"s; },
-			[&](const double&) {
+			[&](nullptr_t) { return "null"s; },
+			[&](bool) { return as_bool() ? "true"s : "false"s; },
+			[&](double) {
 				char b[24];
 				const auto [p, e] = std::to_chars(b, b + std::size(b), as_num());
 				return std::string{ b, p };
