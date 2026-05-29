@@ -1,7 +1,7 @@
 /*
 	RWip.cpp - Windows Inactivity Proxy (a small but useful Windows app)
 
-	Copyright(c) 2016-2024, Robert Roessler
+	Copyright(c) 2016-2025, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -37,7 +37,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include <cwchar>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -313,8 +312,7 @@ static constexpr auto powerMsgOther2string(WPARAM wp)
 	else return "";
 }
 
-template<typename... ARGS>
-static void trace(const ARGS&... args)
+static void trace(auto&& ...args)
 {
 	if constexpr (trace_enabled) {
 		// construct trace message prefix including current "state machine" indicators
@@ -326,10 +324,38 @@ static void trace(const ARGS&... args)
 				monitorState == Monitor::On ? 'M' : monitorState == Monitor::Dimmed ? 'm' : '_');
 			return { b, r.out };
 		};
-		const string_view fmt{ "{}{}{}{}{}{}{}{}", (min(sizeof...(ARGS), 7) + 1) * 2 };
 		char b[32];
-		::OutputDebugStringA(std::vformat(fmt, std::make_format_args(tracePre(b, std::size(b)), args...)).c_str());
+		::OutputDebugStringA(
+			std::format(
+				string_view{ "{}{}{}{}{}{}{}{}", (min(sizeof...(args), 7) + 1) * 2 },
+				tracePre(b, std::size(b)), args...).c_str());
 	}
+}
+
+/*
+	"safe" text getters for windows and listboxes
+*/
+
+static auto getWindowText(HWND h) {
+	// N.B. - we operate in UTF8-land, always!
+	string b;
+	if (const auto n{ ::SendMessage(h, WM_GETTEXTLENGTH, 0, 0) }; n > 0) {
+		b.resize(n + 1);
+		const auto a{ ::SendMessage(h, WM_GETTEXT, n + 1, (LPARAM)b.data()) };
+		b.resize(a);
+	}
+	return b;
+};
+
+static auto getListBoxText(HWND h, int i) {
+	// N.B. - we operate in UTF8-land, always!
+	string b;
+	if (const auto n{ ::SendMessage(h, CB_GETLBTEXTLEN, i, 0) }; n > 0) {
+		b.resize(n + 1);
+		const auto a{ ::SendMessage(h, CB_GETLBTEXT, i, (LPARAM)b.data()) };
+		b.resize(a);
+	}
+	return b;
 }
 
 /*
@@ -429,16 +455,22 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 	auto dT = ticks - last;
 	if (const auto& [_, period] = intervals[periodId]; dT >= period || forceRun) {
 		forceRun = false;
+		// mouse in ANY corner of screen means DON'T run app!
+		if (POINT p; ::GetCursorPos(&p),
+			(!p.x && (!p.y || p.y == (desktopR.bottom - 1))) ||
+			(p.x == (desktopR.right - 1) && (!p.y || p.y == (desktopR.bottom - 1)))) {
+			last = ticks; // "skip" by restarting timer at current interval
+			return;
+		}
 		if (runningFullscreenApp()) {
 			last = ticks; // fullscreen mode is NOT treated as "inactivity"
 			return;
 		}
 		deleteTimer();
 		trace("DELETED inactivity timer, STARTING inactivity task...");
-		char cmd[MAX_PATH + 16];
-		const auto n = ::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
+		const auto cmd{ getWindowText(executableH) };
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
-		if (DWORD exit = 0; (size_t)n < std::size(cmd) && (checked ? runRestrictedProcessAndWait : runProcessAndWait)(cmd, exit)) {
+		if (DWORD exit = 0; (checked ? runRestrictedProcessAndWait : runProcessAndWait)((char*)cmd.c_str(), exit)) {
 			trace("INACTIVITY task finished, exit code => ", exit);
 			if (!timer && userPresent && monitorState == Monitor::On)
 				last = ::GetTickCount64(),
@@ -468,7 +500,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 static auto collectCmdsFromProperties()
 {
 	set<string> elements;
-	for (auto& c : configDB["lib"].as_arr())
+	for (const auto& c : configDB["lib"].as_arr())
 		elements.emplace(c.as_string());
 	return elements;
 }
@@ -525,20 +557,20 @@ static void createChildren(HWND w, CREATESTRUCT* cs)
 				mouse "wheel" messages to a sub-classed LISTBOX control in a
 				COMBOBOX... which are typically just discarded.
 			*/
-		(LONG_PTR)WNDPROC([](HWND w, UINT mId, WPARAM wp, LPARAM lp)->LRESULT {
-				if (mId == WM_MOUSEWHEEL) {
-					const auto dY = int(wp) >> 16;
-					auto id = periodId + (dY < 0 ? 1 : dY > 0 ? -1 : 0);
-					if (id < 0)
-						id = 0;
-					else if (id >= decltype(id)(std::size(intervals)))
-						id = decltype(id)(std::size(intervals)) - 1;
-					if (id != periodId)
-						::SendMessage(periodH, CB_SETCURSEL, periodId = id, 0);
-					return 0;
-				}
-				// not for us, leave with "default" processing
-				return ::CallWindowProc(oldListBoxProc, w, mId, wp, lp);
+			(LONG_PTR)WNDPROC([](HWND w, UINT mId, WPARAM wp, LPARAM lp)->LRESULT {
+					if (mId == WM_MOUSEWHEEL) {
+						const auto dY = int(wp) >> 16;
+						auto id = periodId + (dY < 0 ? 1 : dY > 0 ? -1 : 0);
+						if (id < 0)
+							id = 0;
+						else if (id >= decltype(id)(std::size(intervals)))
+							id = decltype(id)(std::size(intervals)) - 1;
+						if (id != periodId)
+							::SendMessage(periodH, CB_SETCURSEL, periodId = id, 0);
+						return 0;
+					}
+					// not for us, leave with "default" processing
+					return ::CallWindowProc(oldListBoxProc, w, mId, wp, lp);
 			}));
 
 	restrictedH = ::CreateWindow("BUTTON",
@@ -669,12 +701,11 @@ static LRESULT CALLBACK wndProc(HWND w, UINT mId, WPARAM wp, LPARAM lp)
 				forceRun = true, ::ShowWindow(w, SW_MINIMIZE);
 				return 0;
 			} else if (LOWORD(wp) == (WORD)ControlID::Add || LOWORD(wp) == (WORD)ControlID::Remove) {
-				char cmd[MAX_PATH + 16];
-				::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
-				if (const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd); LOWORD(wp) == (WORD)ControlID::Add) {
+				const auto cmd{ getWindowText(executableH) };
+				if (const auto i = ::SendMessage(executableH, CB_FINDSTRINGEXACT, -1, (LPARAM)cmd.c_str()); LOWORD(wp) == (WORD)ControlID::Add) {
 					if (i == CB_ERR) {
 						// (... only if we DIDN'T find it, i.e., disallow DUPES)
-						const auto j = ::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)cmd);
+						const auto j = ::SendMessage(executableH, CB_ADDSTRING, 0, (LPARAM)cmd.c_str());
 						::SendMessage(executableH, CB_SETCURSEL, j, 0);
 					}
 				} else /*if (LOWORD(wp) == Remove)*/ {
@@ -783,11 +814,8 @@ static auto collectCmdsFromUI()
 {
 	set<string> elements;
 	const auto n = ::SendMessage(executableH, CB_GETCOUNT, 0, 0);
-	for (auto i = 0; i < n; i++) {
-		char cmd[MAX_PATH + 16];
-		::SendMessage(executableH, CB_GETLBTEXT, i, (LPARAM)cmd);
-		elements.emplace(cmd);
-	}
+	for (auto i = 0; i < n; i++)
+		elements.emplace(getListBoxText(executableH, i));
 	return elements;
 }
 
@@ -802,8 +830,7 @@ static void saveConfig()
 		if (std::ofstream f(path, std::ios::trunc | std::ios::binary); f.is_open())
 			f.write(t.data(), t.size());
 	};
-	char cmd[MAX_PATH + 16];
-	const auto n = ::SendMessage(executableH, WM_GETTEXT, std::size(cmd), (LPARAM)cmd);
+	const auto cmd{ getWindowText(executableH) };
 	const auto uiCmds = collectCmdsFromUI();
 	const auto propCmds = collectCmdsFromProperties();
 	const auto restrict = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -811,7 +838,7 @@ static void saveConfig()
 		configDB["cmd"].as_string() != cmd || propCmds != uiCmds ||
 		configDB["del"].as_num() != periodId ||
 		configDB["run"].as_bool() != restrict) {
-		configDB["cmd"] = string{ cmd, (size_t)n };
+		configDB["cmd"] = cmd;
 		configDB["lib"] = js_arr{ uiCmds.cbegin(), uiCmds.cend() };
 		configDB["del"] = periodId;
 		configDB["run"] = restrict;
@@ -857,7 +884,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 	::GetWindowRect(desktopH, &desktopR);
 	loadConfig();
 	const HWND wH = ::CreateWindow(LPCTSTR(wA),
-		"RWip 1.8 - Windows Inactivity Proxy",
+		"RWip 1.9 - Windows Inactivity Proxy",
 		WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE,
 		0, 0, 560, 280, 0, 0, inst, nullptr);
 	if (wH == nullptr)

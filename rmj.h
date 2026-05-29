@@ -1,7 +1,7 @@
 /*
 	rmj.h - interface (AND implementation) of the RMj "mini" JSON parser
 
-	Copyright(c) 2024, Robert Roessler
+	Copyright(c) 2024-2026, Robert Roessler
 	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
@@ -29,13 +29,25 @@
 
 #pragma once
 
+// uncomment one or both of the below to remove I/O / std::format dependencies
+// N.B. - the test/sample code in t0.cpp is heavily dependent on STREAM output
+//#define NO_STREAM 1
+//#define NO_FORMAT 1
+
 #include <string>
 #include <string_view>
 #include <map>
 #include <vector>
 #include <charconv>
 #include <stdexcept>
-#include <type_traits>
+#include <concepts>
+#ifndef NO_STREAM
+#include <ostream>
+#include <ios>
+#endif
+#ifndef NO_FORMAT
+#include <format>
+#endif
 #include "variant.hpp"
 
 namespace rmj {
@@ -173,10 +185,10 @@ namespace detail {
 	template<class WordOutput>
 	constexpr void codePointToUTF16(char32_t c, WordOutput g) {
 		if (c < 0xd800 || (c >= 0xe000 && c < 0x10000))
-			g((wchar_t)c);
+			g((char16_t)c);
 		else {
 			const unsigned int v = c - 0x10000;
-			g((wchar_t)(0xd800 | (v & 0x3ff))), g((wchar_t)(0xdc00 | (v >> 10)));
+			g((char16_t)(0xd800 | (v & 0x3ff))), g((char16_t)(0xdc00 | (v >> 10)));
 		}
 	}
 
@@ -191,13 +203,13 @@ namespace detail {
 		return 0; // ("CAN'T happen")
 	}
 
-	constexpr char32_t codePointFromUTF16(const wchar_t* u) {
+	constexpr char32_t codePointFromUTF16(const char16_t* u) {
 		return
 			sizeOfUTF16CodeUnits(u[0]) == 1 ? u[0] :
 			((u[0] - 0xd800) << 10) + (u[1] - 0xdc00) + 0x10000;
 	}
 
-	constexpr std::string utf8StringFromUTF16(const wchar_t* u) {
+	constexpr std::string utf8StringFromUTF16(const char16_t* u) {
 		std::string t;
 		while (*u)
 			codePointToUTF8(codePointFromUTF16(u), [&t](char c) { t.push_back(c); }),
@@ -205,10 +217,10 @@ namespace detail {
 		return t;
 	}
 
-	constexpr std::wstring utf16StringFromUTF8(const char* u) {
-		std::wstring t;
+	constexpr std::u16string utf16StringFromUTF8(const char* u) {
+		std::u16string t;
 		while (*u)
-			codePointToUTF16(codePointFromUTF8(u), [&t](wchar_t c) { t.push_back(c); }),
+			codePointToUTF16(codePointFromUTF8(u), [&t](char16_t c) { t.push_back(c); }),
 			u += sizeOfUTF8CodeUnits(*u);
 		return t;
 	}
@@ -229,20 +241,27 @@ class js_val : public js_val_base {
 	using js_arr_ext = std::vector<js_val>;
 
 public:
-	// various ctors, "converting" and otherwise
+	// various ctors, copying, "converting" and otherwise
 	js_val() = default;
 	js_val(const js_val&) = default;
-	constexpr js_val(const js_val_base& v) { get_base() = v; }
-	constexpr js_val(js_val_base&& v) { get_base() = v; }
+	js_val(js_val&&) noexcept = default;
+	js_val& operator=(js_val const&) = default;
+	js_val& operator=(js_val&&) noexcept = default;
 
-	constexpr js_val(nullptr_t v) { get_base() = v; }
-	constexpr js_val(bool v) { get_base() = v; }
+	constexpr js_val(const nullptr_t& v) noexcept { get_base() = v; }
+	constexpr js_val(const bool& v) noexcept { get_base() = v; }
 	// coerce ANY "numeric" value (see detail::numeric concept) to underlying
 	// JSON/js_val numeric type of [IEEE 754] double
-	constexpr js_val(detail::numeric auto v) { get_base() = (double)v; }
-	constexpr js_val(std::string v) { get_base() = v; }
-	/*constexpr*/ js_val(js_obj v) { get_base() = v; }
-	constexpr js_val(js_arr v) { get_base() = v; }
+	constexpr js_val(const detail::numeric auto& v) noexcept { get_base() = double(v); }
+	// accept std::strings and string literals...
+	constexpr js_val(const std::string& v) { get_base() = v; }
+	constexpr js_val(std::string&& v) noexcept { get_base() = v; }
+	// ... but also accept std::string_views...
+	constexpr js_val(const std::string_view& v) { get_base() = std::string{ v }; }
+	// ... and "classic" NUL-terminated strings
+	constexpr js_val(const char* v) { get_base() = std::string{ v }; }
+	constexpr js_val(const js_obj& v) { get_base() = v; }
+	constexpr js_val(const js_arr& v) { get_base() = v; }
 
 	// query the current type held in our variant / "sum type"
 	constexpr auto is_null() const noexcept { return std::holds_alternative<nullptr_t>(get_base()); }
@@ -254,24 +273,102 @@ public:
 
 	// return ref to the requested type in our variant / "sum type"
 	constexpr const auto& as_null() const { return std::get<nullptr_t>(get_base()); }
-	constexpr auto& as_null() { return std::get<nullptr_t>(get_base()); }
 	constexpr const auto& as_bool() const { return std::get<bool>(get_base()); }
 	constexpr auto& as_bool() { return std::get<bool>(get_base()); }
 	constexpr const auto& as_num() const { return std::get<double>(get_base()); }
 	constexpr auto& as_num() { return std::get<double>(get_base()); }
 	constexpr const auto& as_string() const { return std::get<std::string>(get_base()); }
 	constexpr auto& as_string() { return std::get<std::string>(get_base()); }
-	/*constexpr const auto& as_obj() const { return (js_obj_ext&)std::get<js_obj>(get_base()); }*/
-	constexpr auto& as_obj() { return (js_obj_ext&)std::get<js_obj>(get_base()); }
-	constexpr const auto& as_arr() const { return (js_arr_ext&)std::get<js_arr>(get_base()); }
-	constexpr auto& as_arr() { return (js_arr_ext&)std::get<js_arr>(get_base()); }
+	/*inline const auto& as_obj() const { return (js_obj_ext&)std::get<js_obj>(get_base()); }*/
+	inline auto& as_obj() const { return (js_obj_ext&)std::get<js_obj>(get_base()); }
+	inline const auto& as_arr() const { return (js_arr_ext&)std::get<js_arr>(get_base()); }
+	inline auto& as_arr() { return (js_arr_ext&)std::get<js_arr>(get_base()); }
 
 	// "convenience" operators for element access in js_obj and js_arr collections
 	// N.B. - these will FORCE the map/vector alternatives respectively, be aware!
-	auto& operator[](const std::string& s) { return as_obj()[s]; }
-	auto& operator[](const char* s) { return as_obj()[s]; }
+	inline const auto& operator[](const std::string& s) const { return as_obj()[s]; }
+	inline auto& operator[](const std::string& s) { return as_obj()[s]; }
+	inline const auto& operator[](const char* s) const { return as_obj()[s]; }
+	inline auto& operator[](const char* s) { return as_obj()[s]; }
 	constexpr const auto& operator[](std::integral auto i) const { return as_arr()[i]; }
 	constexpr auto& operator[](std::integral auto i) { return as_arr()[i]; }
+
+	// "spaceship" 3-way "recursive" variant comparison operator (from c++20)
+	// N.B. - returns -1, 0, or 1 vs the more esoteric orderings / equalities
+	constexpr auto operator<=>(const js_val& u) const {
+		const auto& t{ *this };
+		// map std *_ordering values to the slightly more useful -1, 0, 1
+		constexpr auto to_int = [](auto o) noexcept {
+			if constexpr (std::same_as<decltype(o), std::strong_ordering>) {
+				if (o == std::strong_ordering::less)
+					return -1;
+				else if (o == std::strong_ordering::equal ||
+					o == std::strong_ordering::equivalent)
+					return 0;
+				else // if (o == std::strong_ordering::greater)
+					return 1;
+			} else {
+				if (o == std::partial_ordering::less)
+					return -1;
+				else if (o == std::partial_ordering::equivalent)
+					return 0;
+				else if (o == std::partial_ordering::greater)
+					return 1;
+				else // if (o == std::partial_ordering::unordered)
+					return 0; // (arbitrarily assigned, doesn't imply ordering)
+			}
+		};
+		// Logic for "spaceship" 3-way comparison operator for variants @
+		// https://en.cppreference.com/w/cpp/utility/variant/operator_cmp
+		if (t.valueless_by_exception() && u.valueless_by_exception())
+			return to_int(std::strong_ordering::equal);
+		if (t.valueless_by_exception())
+			return to_int(std::strong_ordering::less);
+		if (u.valueless_by_exception())
+			return to_int(std::strong_ordering::greater);
+		if (t.index() != u.index())
+			return to_int(t.index() <=> u.index());
+		switch (t.index()) {
+		case 0: // nullptr_t
+			return to_int(std::strong_ordering::equal);
+		case 1: // bool
+			return to_int(get<1>(t) <=> get<1>(u));
+		case 2: // double
+			return to_int(get<2>(t) <=> get<2>(u));
+		case 3: // std::string
+			return to_int(get<3>(t) <=> get<3>(u));
+		case 4: // map<std::string, js_val>
+			return to_int((const js_obj_ext&)get<4>(t) <=> (const js_obj_ext&)get<4>(u));
+		case 5: // std::vector<js_val>>
+			return to_int((const js_arr_ext&)get<5>(t) <=> (const js_arr_ext&)get<5>(u));
+		default:
+			return to_int(std::partial_ordering::unordered); // (NOT expected)
+		}
+	}
+	// ... along with the accompanying explicit definition for operator==
+	constexpr bool operator==(const js_val& u) const {
+		const auto& t{ *this };
+		if (t.valueless_by_exception() || u.valueless_by_exception())
+			return t.valueless_by_exception() && u.valueless_by_exception();
+		if (t.index() != u.index())
+			return false;
+		switch (t.index()) {
+		case 0: // nullptr_t
+			return true;
+		case 1: // bool
+			return get<1>(t) == get<1>(u);
+		case 2: // double
+			return get<2>(t) == get<2>(u);
+		case 3: // std::string
+			return get<3>(t) == get<3>(u);
+		case 4: // map<std::string, js_val>
+			return get<4>(t) == get<4>(u);
+		case 5: // std::vector<js_val>>
+			return get<5>(t) == get<5>(u);
+		default:
+			return false; // (NOT expected)
+		}
+	}
 
 private:
 	// defs supporting the implementation of RMj's parse() and to_string()...
@@ -304,18 +401,45 @@ public:
 		rmj::to_string, appear as their EXACTLY EQUIVALENT utf-8 forms... which MAY
 		include some "control characters" (U+0000 - U+001F) represented as "\u00nn".
 
+		For the "official" v1 release, the above is still true - but NOT as default
+		behavior.  The default is to output any non-ASCII and "control" characters
+		using JSON "escape" sequences... these are fully compatible and equivalent,
+		and defined in the JSON standard referenced above - but always printable.
+		To get the full "UNICODE-encoded-as-UTF-8" behavior for string output, just
+		call the public to_string fn with a bool 'true' parameter.
+
+		An important note on both to_string and parse (below) is that they are based
+		on the C++ library functions std::to_chars and std::from_chars... while this
+		is a Good Thing(tm) - in that "round trips" of JSON numbers (recall these are
+		represented by IEEE 754 64-bit floating point numbers, aka "doubles") will be
+		GUARANTEED to be symmetric - in that numeric values output by RMj will always
+		be a) readable by RMj, and b) they will result in the SAME internal numeric
+		value.  However, what may not match is attempting to compare these displayed
+		values with those output by other methods, such as the conversions performed
+		when outputting (and then inputting) doubles when using the C++ library "std"
+		stream input and output operations.
+
 		As an additional note on "round trips", any JSON text that included a BOM at
 		the beginning was politely accepted, after IGNORING said BOM... and under no
 		circumstances is any attempt made to remember this and include it in the new
 		version of the JSON text produced by to_string, as this would be in violation
 		of RFC 8259 - and a Bad Idea(tm) in general.
 	*/
-	constexpr std::string to_string() {
+	constexpr std::string to_string(bool pass_thru = false) const {
 		using namespace detail;
 		// return external form of JSON "string"
 		auto string_of_string = [&](std::string_view v) {
 			size_t co{};
 			std::string o;
+			auto utf16 = [&o](char16_t c) {
+				char b[]{ '\\', 'u', '0', '0', '0', '0' };
+				const auto s =
+					c < 0x0010 ? 5 :
+					c < 0x0100 ? 4 :
+					c < 0x1000 ? 3 : 2;
+				ignore(std::to_chars(b + s, b + std::size(b), c, 16));
+				o.append(b, std::size(b));
+			};
 			o.reserve(256);
 			o.push_back('"');
 			while (co < v.size())
@@ -331,16 +455,16 @@ public:
 					case 0x22: o.append("\\\""sv); break;
 					case 0x5c: o.append("\\\\"sv); break;
 					default:
-						if (c < 0x20) {
-							char b[]{ '\\', 'u', '0', '0', '0', '0' };
-							const auto s = c < 0x10 ? 5 : 4;
-							auto [p, e] = std::to_chars(b + s, b + 6, c, 16);
-							ignore(p), ignore(e);
-							o.append(b, 6);
-						} else
+						if (c < 0x20)
+							utf16(c);
+						else
 							o.push_back(c);
 						break;
 					}
+				} else if (!pass_thru) {
+					// (handle utf-16 Basic Multilingual Plane as well as surrogate pairs)
+					codePointToUTF16(codePointFromUTF8(v.data() + co), utf16);
+					co += n;
 				} else
 					while (n--)
 						o.push_back(v[co++]);
@@ -352,11 +476,13 @@ public:
 			std::string o;
 			o.reserve(256);
 			o.push_back('{');
-			for (const auto& [key, val] : v)
-				o.append(o.size() == 1 ? "\""sv : ",\""sv)
-				.append(key)
-				.append("\":"sv)
-				.append(js_val(val).to_string());
+			for (const auto& [key, val] : v) {
+				if (o.size() > 1)
+					o.push_back(',');
+				o.append(string_of_string(key))
+				.append(":"sv)
+				.append(val.to_string(pass_thru));
+			}
 			o.push_back('}');
 			return o;
 		};
@@ -368,7 +494,7 @@ public:
 			for (const auto& e : v) {
 				if (o.size() > 1)
 					o.push_back(',');
-				o.append(js_val(e).to_string());
+				o.append(e.to_string(pass_thru));
 			}
 			o.push_back(']');
 			return o;
@@ -378,7 +504,7 @@ public:
 			[&](nullptr_t) { return "null"s; },
 			[&](bool) { return as_bool() ? "true"s : "false"s; },
 			[&](double) {
-				char b[24];
+				char b[32];
 				const auto [p, e] = std::to_chars(b, b + std::size(b), as_num());
 				return std::string{ b, p };
 			},
@@ -406,7 +532,7 @@ public:
 		size_t co{}; // ("current offset")
 		// classifier: JSON "whitespace"
 		constexpr auto is_ws = [](auto c) noexcept { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; };
-		// skip over "whitespace", co -> 1st NON-whitespace
+		// skip over POSSIBLE "whitespace", co -> 1st NON-whitespace
 		auto ws = [&]() noexcept {
 			while (co < src.size() && is_ws(src[co]))
 				++co;
@@ -427,20 +553,21 @@ public:
 			double d{};
 			digits();
 			if (co >= src.size() || is_ws(src[co]) || is_eon(src[co])) {
-				// legal number, i.e., NO leading zero?
+				// legal number, i.e., NO leading zero [on MULTI-digit token]?
 				if (src[start] == '0' && (co - start) > 1)
 					throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(start));
 				// have integral value
-				const auto [p, e] = std::from_chars(src.data() + start, src.data() + co, d);
-				ignore(p), ignore(e);
+				ignore(std::from_chars(src.data() + start, src.data() + co, d));
 				return d;
 			}
-			if (src[co] == '.')
+			if (src[co] == '.') {
+				if (++co >= src.size() || !isdigit(src[co]))
+					throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(co));
 				digits();
+			}
 			if (co >= src.size() || is_ws(src[co]) || is_eon(src[co])) {
 				// have fixed-point value
-				const auto [p, e] = std::from_chars(src.data() + start, src.data() + co, d);
-				ignore(p), ignore(e);
+				ignore(std::from_chars(src.data() + start, src.data() + co, d));
 				return d;
 			}
 			if (auto c = src[co]; c == 'e' || c == 'E') {
@@ -448,12 +575,11 @@ public:
 					throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(co));
 				if (c = src[co]; c == '+' || c == '-')
 					++co;
-				if (co >= src.size() || is_ws(src[co]))
+				if (co >= src.size() || !isdigit(src[co]))
 					throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(co));
 				digits();
 				// have fixed-point value WITH exponent
-				const auto [p, e] = std::from_chars(src.data() + start, src.data() + co, d);
-				ignore(p), ignore(e);
+				ignore(std::from_chars(src.data() + start, src.data() + co, d));
 				return d;
 			}
 			throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(co));
@@ -470,27 +596,26 @@ public:
 				return js_val{ false };
 			throw std::runtime_error("Bad parse ([unexpected] KEYWORD) @ "s + std::to_string(start));
 		};
-		// parse JSON "string", converting to utf-8 encoding
+		// parse JSON "string", converting to internal utf-8 "-friendly" form
 		auto string = [&]() {
 			// (handle utf-16 Basic Multilingual Plane as well as surrogate pairs)
+			// N.B. - std::from_chars doesn't [yet] support char16_t as a "target"
 			auto utf16 = [&]() {
 				if (co + 5 >= src.size())
 					throw std::runtime_error("Bad parse (STRING: invalid utf-16 sequence) @ "s + std::to_string(co - 1));
-				uint16_t u[2];
+				char16_t u[2]{};
 				++co;
-				const auto [p, e] = std::from_chars(src.data() + co, src.data() + co + 4, u[0], 16);
-				ignore(p), ignore(e);
+				ignore(std::from_chars(src.data() + co, src.data() + co + 4, (uint16_t&)u[0], 16));
 				co += 4;
 				if (sizeOfUTF16CodeUnits(u[0]) > 1)
 					if (co + 6 >= src.size() || src[co] != '\\' || src[co + 1] != 'u')
 						throw std::runtime_error("Bad parse (STRING: invalid utf-16 surrogate pair) @ "s + std::to_string(co));
 					else {
 						co += 2;
-						const auto [p, e] = std::from_chars(src.data() + co, src.data() + co + 4, u[1], 16);
-						ignore(p), ignore(e);
+						ignore(std::from_chars(src.data() + co, src.data() + co + 4, (uint16_t&)u[1], 16));
 						co += 4;
 					}
-				return codePointFromUTF16((wchar_t*)u);
+				return codePointFromUTF16(u);
 			};
 			std::string o;
 			o.reserve(256);
@@ -576,8 +701,8 @@ public:
 							throw std::runtime_error("Bad parse (OBJECT: expected STRING) @ "s + std::to_string(co));
 						else if (const auto u = next_token(); !has_state(u) || state(u) != obj_colon)
 							throw std::runtime_error("Bad parse (OBJECT: expected ':') @ "s + std::to_string(co));
-						const auto v = (++co, parse_impl(parse_impl));
-						mr.try_emplace(val(t).as_string(), v);
+						auto v = (++co, parse_impl(parse_impl));
+						mr.try_emplace(val(t).as_string(), std::move(v));
 						if (t = next_token(); has_state(t) && state(t) == end_object)
 							break;
 					} while (has_state(t) && state(t) == more_items);
@@ -597,8 +722,8 @@ public:
 							break;
 						else if (has_state(t) && (state(t) != in_object && state(t) != in_array))
 							throw std::runtime_error("Bad parse (expected VALUE) @ "s + std::to_string(co));
-						const auto v = has_val(t) ? val(t) : parse_impl(parse_impl);
-						ar.emplace_back(v);
+						auto v = has_val(t) ? val(t) : parse_impl(parse_impl);
+						ar.push_back(std::move(v));
 						if (t = next_token(); has_state(t) && state(t) == end_array)
 							break;
 					} while (has_state(t) && state(t) == more_items);
@@ -629,4 +754,48 @@ public:
 // e.g., js_arr a{0.0, 1.0, 2.0} is correctly defined/legal as is
 constexpr auto operator""_js(unsigned long long v) noexcept { return (js_num)v; }
 
+#ifndef NO_STREAM
+const auto pass_thru = 42; // (used to enable "pass_thru" in js_val operator<<)
+
+// stream output helper for js_vals (so js_vals can appear in "<<"-style output)
+// N.B. - numeric conversions are based on std::to_chars, NOT std::basic_ostream
+// N.B.2 - to force "pass_thru" operation of the to_string call, use the input /
+// output manipulator "helper" function std::setw, with the value rmj::pass_thru
+//
+// example:
+// os << std::setw(rmj::pass_thru) << rmj::parse("a\u0807\u0808c") << std::endl;
+inline std::ostream& operator<<(std::ostream& os, const js_val& v) {
+	const auto w{ os.width() };
+	// (if using "pass_thru" mode, field width control is really a non-issue)
+	if (w == pass_thru)
+		os.width(0);
+	return os << v.to_string(w == pass_thru);
 }
+#endif
+
+}
+
+#ifndef NO_FORMAT
+// custom c++20 "formatter" for use with rmj::js_val values
+// N.B. - use '_' format specifier to invoke "pass_thru" operation of to_string!
+//
+// example:
+// os << std::format("{:_}\n", rmj::parse("a\u0807\u0808c"));
+namespace std {
+	template<>
+	struct formatter<rmj::js_val> : formatter<string_view> {
+		bool pass_thru{};
+		constexpr auto parse(format_parse_context& ctx) {
+			auto it{ ctx.begin() };
+			if (it != ctx.end() && *it == '_')
+				pass_thru = true, ++it;
+			if (it != ctx.end() && *it != '}')
+				throw format_error("invalid format specifier for js_val!");
+			return it;
+		}
+		auto format(const rmj::js_val& v, format_context& ctx) const {
+			return formatter<string_view>::format(v.to_string(pass_thru), ctx);
+		}
+	};
+}
+#endif
