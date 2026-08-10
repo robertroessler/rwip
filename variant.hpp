@@ -168,7 +168,7 @@ constexpr auto const* get_if(const rva::variant<Types...>* pv) noexcept {
 
 template <class T, class... Types>
 constexpr bool holds_alternative(const rva::variant<Types...>& v) noexcept {
-    return std::holds_alternative(v.get_base());
+    return std::holds_alternative<T>(v.get_base());
 }
 } // namespace rva
 

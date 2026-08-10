@@ -2,7 +2,6 @@
 	rmj.h - interface (AND implementation) of the RMj "mini" JSON parser
 
 	Copyright(c) 2024-2026, Robert Roessler
-	All rights reserved.
 
 	Redistribution and use in source and binary forms, with or without
 	modification, are permitted provided that the following conditions are met:
@@ -92,8 +91,109 @@ namespace detail {
 		Note that we are looking for very specific utf-8/ascii codepoints, so
 		we do NOT want any "locale-mapping" to be taking place.
 	*/
-	constexpr auto isdigit(char8_t c) noexcept { return c >= '0' && c <= '9'; }
-	constexpr auto isalpha(char8_t c) noexcept { return c >= 'a' && c <= 'z'; }
+	constexpr auto isdigit(char8_t c) noexcept {
+		// (conceptually, c >= '0' && c <= '9')
+		return c - (unsigned)'0' < 10;
+	}
+	// support detection of JSON "Whitespace" in "parse"
+	inline constexpr unsigned char is_ws_t[] = {
+		// (supports c == ' ' || c == '\n' || c == '\r' || c == '\t')
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 1, 0, 0, // '\t', '\n', '\r'
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // ' '
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+	};
+	// support detection of JSON "End-Of-Number" in "parse"
+	inline constexpr unsigned char is_eon_t[] = {
+		// (supports c == ',' || c == '}' || c == ']')
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, // ','
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, // ']'
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, // '}'
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+	};
+	// support detection of NON-bulk copies in "parse"
+	inline constexpr unsigned char is_slow_input_t[] = {
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // '"' (not terminated?)
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, // '\\'
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+	};
+	// support detection of NON-bulk copies in "to_string"
+	inline constexpr unsigned char is_slow_output_t[] = {
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // '"'
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, // '\\'
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+	};
+	// support detection of JSON "Alphabetic" in "parse"
+	inline constexpr unsigned char alpha_t[] = {
+		// (supports c >= 'a' && c <= 'z')
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 'a' - 'p'
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, // 'q' - 'z'
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+	};
+	constexpr auto isalpha(char8_t c) noexcept {
+		// (conceptually, c >= 'a' && c <= 'z')
+		return alpha_t[c] != 0;
+	}
 
 	/*
 		sizeOfUTF8CodeUnits returns the length in bytes of a UTF-8 code point, based
@@ -296,7 +396,7 @@ public:
 	// "spaceship" 3-way "recursive" variant comparison operator (from c++20)
 	// N.B. - returns -1, 0, or 1 vs the more esoteric orderings / equalities
 	constexpr auto operator<=>(const js_val& u) const {
-		const auto& t{ *this };
+		const auto& t{ get_base() };
 		// map std *_ordering values to the slightly more useful -1, 0, 1
 		constexpr auto to_int = [](auto o) noexcept {
 			if constexpr (std::same_as<decltype(o), std::strong_ordering>) {
@@ -347,7 +447,7 @@ public:
 	}
 	// ... along with the accompanying explicit definition for operator==
 	constexpr bool operator==(const js_val& u) const {
-		const auto& t{ *this };
+		const auto& t{ get_base() };
 		if (t.valueless_by_exception() || u.valueless_by_exception())
 			return t.valueless_by_exception() && u.valueless_by_exception();
 		if (t.index() != u.index())
@@ -378,11 +478,11 @@ private:
 	using val_or_state = std::variant<js_val, parse_state>;
 
 	// ... including the below riffs on "is" and "as" used above...
-	constexpr static auto has_state(auto v) noexcept { return std::holds_alternative<parse_state>(v); }
-	constexpr static auto state(auto v) { return std::get<parse_state>(v); }
+	constexpr static auto has_val(const auto& v) noexcept { return std::holds_alternative<js_val>(v); }
+	constexpr static auto& val(const auto& v) { return std::get<js_val>(v); }
 
-	constexpr static auto has_val(auto v) noexcept { return std::holds_alternative<js_val>(v); }
-	constexpr static auto val(auto v) { return std::get<js_val>(v); }
+	constexpr static auto has_state(const auto& v) noexcept { return std::holds_alternative<parse_state>(v); }
+	constexpr static auto state(const auto& v) { return std::get<parse_state>(v); }
 
 	// ... and the mysterious and magical "overload" template for std::visit()
 	template<class... Ts> struct overload : Ts... { using Ts::operator()...; };
@@ -431,6 +531,14 @@ public:
 		auto string_of_string = [&](std::string_view v) {
 			size_t co{};
 			std::string o;
+			auto distance_to_next_slow = [&](auto p) {
+				const auto i = std::find_if(v.begin() + p, v.end(),
+					[](char8_t c) {
+						return is_slow_output_t[c] != 0;
+					});
+				// (we are OK with i == v.end(), it just means "all the rest")
+				return std::distance(v.begin() + p, i);
+			};
 			auto utf16 = [&o](char16_t c) {
 				char b[]{ '\\', 'u', '0', '0', '0', '0' };
 				const auto s =
@@ -443,7 +551,11 @@ public:
 			o.reserve(256);
 			o.push_back('"');
 			while (co < v.size())
-				if (auto n = sizeOfUTF8CodeUnits((char8_t)v[co]); n <= 1) {
+				// process "fast path" (i.e., NO escapes / NO utf-8) segments...
+				if (const auto d{ distance_to_next_slow(co) }; d > 0)
+					o.append(v.substr(co, d)), co += d;
+				// ... nope, handle THIS segment a single code unit at a time
+				else if (const auto n = sizeOfUTF8CodeUnits((char8_t)v[co]); n <= 1) {
 					if (!n)
 						throw std::runtime_error("Bad stringify (STRING: invalid utf-8 sequence)"s);
 					switch (const auto c = (char8_t)v[co++]; c) {
@@ -461,13 +573,13 @@ public:
 							o.push_back(c);
 						break;
 					}
-				} else if (!pass_thru) {
+				} else if (!pass_thru)
 					// (handle utf-16 Basic Multilingual Plane as well as surrogate pairs)
-					codePointToUTF16(codePointFromUTF8(v.data() + co), utf16);
+					codePointToUTF16(codePointFromUTF8(v.data() + co), utf16),
 					co += n;
-				} else
-					while (n--)
-						o.push_back(v[co++]);
+				else
+					// pass_thru: add the current utf-8 sequence to string
+					o.append(v.substr(co, n)), co += n;
 			o.push_back('"');
 			return o;
 		};
@@ -500,7 +612,7 @@ public:
 			return o;
 		};
 		// return external form of JSON "value"
-		return std::visit(overload{
+		return std::visit<std::string>(overload{
 			[&](nullptr_t) { return "null"s; },
 			[&](bool) { return as_bool() ? "true"s : "false"s; },
 			[&](double) {
@@ -531,58 +643,62 @@ public:
 		using namespace detail;
 		size_t co{}; // ("current offset")
 		// classifier: JSON "whitespace"
-		constexpr auto is_ws = [](auto c) noexcept { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; };
+		constexpr auto is_ws = [](auto c) noexcept { return is_ws_t[c] != 0; };
 		// skip over POSSIBLE "whitespace", co -> 1st NON-whitespace
 		auto ws = [&]() noexcept {
-			while (co < src.size() && is_ws(src[co]))
-				++co;
+			for (const auto n = src.size(); co < n && is_ws(src[co]); ++co) ;
 		};
 		// skip over "digits", co -> 1st NON-digit
 		auto digits = [&]() noexcept {
-			while (++co < src.size() && isdigit(src[co])) ;
+			for (const auto n = src.size(); ++co < n && isdigit(src[co]);) ;
 		};
 		// skip over JSON "keyword" chars, co -> 1st NON-alpha
 		auto alphas = [&]() noexcept {
-			while (++co < src.size() && isalpha(src[co])) ;
+			for (const auto n = src.size(); ++co < n && isalpha(src[co]);) ;
 		};
 		// parse JSON "number", converting to IEEE 64-bit float (aka "double")
 		auto number = [&]() {
 			// classifier: [tokens ending] JSON "number"
-			constexpr auto is_eon = [](auto c) noexcept { return c == ',' || c == '}' || c == ']'; };
+			constexpr auto is_eon = [](auto c) noexcept { return is_eon_t[c] != 0; };
+			constexpr auto throw_on_bad_number = [](auto o) {
+				throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(o));
+			};
 			const auto start{ co };
-			double d{};
+			// N.B. - any leading '-' has ALREADY been consumed by now
 			digits();
 			if (co >= src.size() || is_ws(src[co]) || is_eon(src[co])) {
 				// legal number, i.e., NO leading zero [on MULTI-digit token]?
 				if (src[start] == '0' && (co - start) > 1)
-					throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(start));
+					throw_on_bad_number(start);
 				// have integral value
-				ignore(std::from_chars(src.data() + start, src.data() + co, d));
-				return d;
-			}
-			if (src[co] == '.') {
+			} else if (src[co] == '.') {
+				// legal fractional part, i.e., one or more digits after '.'?
 				if (++co >= src.size() || !isdigit(src[co]))
-					throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(co));
-				digits();
+					throw_on_bad_number(co);
+				digits(); // SHOULD have [at least] fixed-point value
 			}
-			if (co >= src.size() || is_ws(src[co]) || is_eon(src[co])) {
-				// have fixed-point value
-				ignore(std::from_chars(src.data() + start, src.data() + co, d));
-				return d;
-			}
-			if (auto c = src[co]; c == 'e' || c == 'E') {
-				if (++co >= src.size())
-					throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(co));
-				if (c = src[co]; c == '+' || c == '-')
-					++co;
-				if (co >= src.size() || !isdigit(src[co]))
-					throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(co));
-				digits();
-				// have fixed-point value WITH exponent
-				ignore(std::from_chars(src.data() + start, src.data() + co, d));
-				return d;
-			}
-			throw std::runtime_error("Bad parse (NUMBER) @ "s + std::to_string(co));
+			if (co < src.size() && !(is_ws(src[co]) || is_eon(src[co])))
+				if (auto c = src[co]; c == 'e' || c == 'E') {
+					// legal exponent, which means e|E [ sign ] digits?
+					if (++co >= src.size() || is_ws(src[co]))
+						throw_on_bad_number(co);
+					if (c = src[co]; c == '+' || c == '-')
+						++co;
+					if (co >= src.size() || !isdigit(src[co]))
+						throw_on_bad_number(co);
+					digits(); // SHOULD have fixed-point value WITH exponent
+				}
+			// all right, SHOULD have [-] digits [. digits] [e|E [+|-] digits]
+			// (rely on std::from_chars itself to flag syntax or range issues)
+			double d{};
+			const auto [p, e] = std::from_chars(
+				src.data() + start, src.data() + co, d,
+				std::chars_format::fixed | std::chars_format::scientific);
+			if (e == std::errc::invalid_argument)
+				throw_on_bad_number(co);
+			else if (e == std::errc::result_out_of_range)
+				throw_on_bad_number(start);
+			return d;
 		};
 		// parse JSON "keyword"
 		auto keyword = [&]() {
@@ -598,6 +714,16 @@ public:
 		};
 		// parse JSON "string", converting to internal utf-8 "-friendly" form
 		auto string = [&]() {
+			auto distance_to_next_slow = [&](auto p) -> std::pair<bool, int> {
+				const auto i = std::find_if(src.begin() + p, src.end(),
+					[](char8_t c) {
+						return is_slow_input_t[c] != 0;
+					});
+				// (we are NOT OK with i == src.end()!)
+				return i != src.end() ?
+					std::pair(true, (int)std::distance(src.begin() + p, i)) :
+					std::pair(false, 0);
+			};
 			// (handle utf-16 Basic Multilingual Plane as well as surrogate pairs)
 			// N.B. - std::from_chars doesn't [yet] support char16_t as a "target"
 			auto utf16 = [&]() {
@@ -619,9 +745,15 @@ public:
 			};
 			std::string o;
 			o.reserve(256);
-			++co;
+			++co; // (consume initial '"')
 			while (co < src.size() && src[co] != '"')
-				if (src[co] == '\\') {
+				// check for "fast path" (i.e., NO escapes and NO utf-8) first...
+				if (auto [succ, d]{ distance_to_next_slow(co) }; succ && d > 0)
+					o.append(src.substr(co, d)), co += d; // we're outta here!
+				else if (!succ)
+					co = src.size(); // FORCE invalid termination exception
+				// ... nope, handle THIS segment a single code unit at a time
+				else if (src[co] == '\\') {
 					switch (src[++co]) {
 					case '"': o.push_back('"'); break;
 					case '\\': o.push_back('\\'); break;
@@ -640,11 +772,11 @@ public:
 					}
 					++co;
 				} else {
-					auto n = sizeOfUTF8CodeUnits((char8_t)src[co]);
+					// add the current [error-checked] utf-8 sequence to string
+					const auto n = sizeOfUTF8CodeUnits((char8_t)src[co]);
 					if (!n || co + n > src.size())
 						throw std::runtime_error("Bad parse (STRING: invalid utf-8 sequence) @ "s + std::to_string(co));
-					while (n--)
-						o.push_back(src[co++]);
+					o.append(src.substr(co, n)), co += n;
 				}
 			if (co >= src.size() || src[co++] != '"')
 				throw std::runtime_error("Bad parse (STRING: invalid termination) @ "s + std::to_string(co));
@@ -701,35 +833,35 @@ public:
 							throw std::runtime_error("Bad parse (OBJECT: expected STRING) @ "s + std::to_string(co));
 						else if (const auto u = next_token(); !has_state(u) || state(u) != obj_colon)
 							throw std::runtime_error("Bad parse (OBJECT: expected ':') @ "s + std::to_string(co));
-						auto v = (++co, parse_impl(parse_impl));
-						mr.try_emplace(val(t).as_string(), std::move(v));
-						if (t = next_token(); has_state(t) && state(t) == end_object)
-							break;
-					} while (has_state(t) && state(t) == more_items);
+						mr.try_emplace(
+							std::move(val(t).as_string()),
+							std::move((++co, parse_impl(parse_impl))));
+					} while (t = next_token(), has_state(t) && state(t) == more_items);
 					if (!has_state(t) || state(t) != end_object)
 						throw std::runtime_error("Bad parse (OBJECT: expected ',' or '}') @ "s + std::to_string(co));
-					++co; // (consume '}')
+					++co; // (consume terminal '}')
 					break;
 				}
 				case in_array: {
 					// (store JSON "array" as C++ std::vector of JSON "values")
 					value = js_arr();
 					auto& ar = value.as_arr();
+					ar.reserve(32);
 					do {
 						++co, t = next_token();
-						// check for [and ALLOW] "empty" array
-						if (has_state(t) && state(t) == end_array && ar.empty())
-							break;
-						else if (has_state(t) && (state(t) != in_object && state(t) != in_array))
-							throw std::runtime_error("Bad parse (expected VALUE) @ "s + std::to_string(co));
-						auto v = has_val(t) ? val(t) : parse_impl(parse_impl);
-						ar.push_back(std::move(v));
-						if (t = next_token(); has_state(t) && state(t) == end_array)
-							break;
-					} while (has_state(t) && state(t) == more_items);
+						if (has_state(t)) {
+							// check for [and ALLOW] "empty" array
+							if (const auto ts{ state(t) }; ts == end_array && ar.empty())
+								break;
+							else if (ts != in_object && ts != in_array)
+								throw std::runtime_error("Bad parse (expected VALUE) @ "s + std::to_string(co));
+							ar.push_back(std::move(parse_impl(parse_impl)));
+						} else
+							ar.push_back(std::move(val(t)));
+					} while (t = next_token(), has_state(t) && state(t) == more_items);
 					if (!has_state(t) || state(t) != end_array)
 						throw std::runtime_error("Bad parse (ARRAY: expected ',' or ']') @ "s + std::to_string(co));
-					++co; // (consume ']')
+					++co; // (consume terminal ']')
 					break;
 				}
 				default:

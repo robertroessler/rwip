@@ -1,8 +1,7 @@
 /*
 	RWip.cpp - Windows Inactivity Proxy (a small but useful Windows app)
 
-	Copyright(c) 2016-2025, Robert Roessler
-	All rights reserved.
+	Copyright(c) 2016-2026, Robert Roessler
 
 	Redistribution and use in source and binary forms, with or without
 	modification, are permitted provided that the following conditions are met:
@@ -42,6 +41,7 @@
 #include <sstream>
 #include <iomanip>
 #include <utility>
+#include <ranges>
 #include <format>
 #include <set>
 #include "rmj.h"
@@ -167,36 +167,36 @@ public:
 static PROCESS_INFORMATION procInfo{};
 
 static std::vector<HPOWERNOTIFY> regs;
-static const std::pair<const char*, GUID> powerMsgs[]{
-	{ "GUID_CONSOLE_DISPLAY_STATE", GUID_CONSOLE_DISPLAY_STATE },
-	{ "GUID_SESSION_DISPLAY_STATUS", GUID_SESSION_DISPLAY_STATUS },
-	{ "GUID_SESSION_USER_PRESENCE", GUID_SESSION_USER_PRESENCE }
+static const std::pair<string_view, GUID> powerMsgs[]{
+	{ "GUID_CONSOLE_DISPLAY_STATE"sv, GUID_CONSOLE_DISPLAY_STATE },
+	{ "GUID_SESSION_DISPLAY_STATUS"sv, GUID_SESSION_DISPLAY_STATUS },
+	{ "GUID_SESSION_USER_PRESENCE"sv, GUID_SESSION_USER_PRESENCE }
 };
-static constexpr std::pair<const char*, WPARAM> powerMsgsOther[]{
-	{ "PBT_APMSUSPEND", PBT_APMSUSPEND },
-	{ "PBT_APMRESUMESUSPEND", PBT_APMRESUMESUSPEND },
-	{ "PBT_APMPOWERSTATUSCHANGE", PBT_APMPOWERSTATUSCHANGE },
-	{ "PBT_APMRESUMEAUTOMATIC", PBT_APMRESUMEAUTOMATIC }
+inline constexpr std::pair<string_view, WPARAM> powerMsgsOther[]{
+	{ "PBT_APMSUSPEND"sv, PBT_APMSUSPEND },
+	{ "PBT_APMRESUMESUSPEND"sv, PBT_APMRESUMESUSPEND },
+	{ "PBT_APMPOWERSTATUSCHANGE"sv, PBT_APMPOWERSTATUSCHANGE },
+	{ "PBT_APMRESUMEAUTOMATIC"sv, PBT_APMRESUMEAUTOMATIC }
 };
 
-static constexpr std::pair<const char*, unsigned long long> intervals[]{
-	{ "1 minute", 1 * 60 * 1000ULL },
-	{ "2 minutes", 2 * 60 * 1000ULL },
-	{ "3 minutes", 3 * 60 * 1000ULL },
-	{ "5 minutes", 5 * 60 * 1000ULL },
-	{ "10 minutes", 10 * 60 * 1000ULL },
-	{ "15 minutes", 15 * 60 * 1000ULL },
-	{ "20 minutes", 20 * 60 * 1000ULL },
-	{ "30 minutes", 30 * 60 * 1000ULL },
-	{ "45 minutes", 45 * 60 * 1000ULL },
-	{ "1 hour", 60 * 60 * 1000ULL }
+inline constexpr std::pair<const char*, unsigned long long> intervals[]{
+	{  "1 minute",   1 * 60 * 1000ull },
+	{  "2 minutes",  2 * 60 * 1000ull },
+	{  "3 minutes",  3 * 60 * 1000ull },
+	{  "5 minutes",  5 * 60 * 1000ull },
+	{ "10 minutes", 10 * 60 * 1000ull },
+	{ "15 minutes", 15 * 60 * 1000ull },
+	{ "20 minutes", 20 * 60 * 1000ull },
+	{ "30 minutes", 30 * 60 * 1000ull },
+	{ "45 minutes", 45 * 60 * 1000ull },
+	{  "1 hour",    60 * 60 * 1000ull }
 };
 
 /*
 	Config "database" support, including defaults.
 */
 static rmj::js_val configDB{};
-static const string default_conf{
+inline constexpr string_view default_conf{
 	R"({
 		"cmd" : "c:\\Windows\\System32\\Bubbles.scr /s",
 		"lib" : [ "c:\\Windows\\System32\\Bubbles.scr /s" ],
@@ -208,7 +208,7 @@ static const string default_conf{
 static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait);
 
 static handle timer{};
-static auto last = 0ULL;
+static auto last = 0ull;
 
 static auto desktopH = ::GetDesktopWindow();
 static RECT desktopR{};
@@ -260,7 +260,7 @@ static auto runningFullscreenApp()
 	// on false positives!
 	char b[64];
 	if (const auto n = ::GetClassName(fW, b, (int)std::size(b)); n)
-		if (string_view v(b, n); v == "WorkerW" || v == "Progman")
+		if (string_view v(b, n); v == "WorkerW"sv || v == "Progman"sv)
 			return false;
 	return true;
 }
@@ -280,13 +280,13 @@ static constexpr auto powerChange2string(const POWERBROADCAST_SETTING* pbs)
 {
 	if constexpr (trace_enabled) {
 		auto f = [](GUID g, DWORD d) {
-			constexpr const char* displayState[]{ "off", "on", "dimmed" };
-			constexpr const char* userPresence[]{ "present", "", "inactive" };
+			constexpr string_view displayState[]{ "off"sv, "on"sv, "dimmed"sv };
+			constexpr string_view userPresence[]{ "present"sv, ""sv, "inactive"sv };
 			if (g == GUID_CONSOLE_DISPLAY_STATE || g == GUID_SESSION_DISPLAY_STATUS)
-				return displayState[d];
+				return string(displayState[d]);
 			else if (g == GUID_SESSION_USER_PRESENCE)
-				return userPresence[d];
-			return ""; // ("shouldn't happen")
+				return string(userPresence[d]);
+			return string{}; // ("shouldn't happen")
 		};
 		// (N.B. - the Data member will be a DWORD whenever ...->Data is evaluated!)
 		for (const auto& [label, guid] : powerMsgs)
@@ -294,7 +294,7 @@ static constexpr auto powerChange2string(const POWERBROADCAST_SETTING* pbs)
 				return std::format("{}={}", label, f(guid, *(DWORD*)pbs->Data));
 		return "<other power-management GUID>"s;
 	}
-	else return "";
+	else return string{};
 }
 
 /*
@@ -306,10 +306,10 @@ static constexpr auto powerMsgOther2string(WPARAM wp)
 	if constexpr (trace_enabled) {
 		for (const auto& [label, msg] : powerMsgsOther)
 			if (wp == msg)
-				return label;
-		return "<other power-management event>";
+				return string(label);
+		return "<other power-management event>"s;
 	}
-	else return "";
+	else return string{};
 }
 
 static void trace(auto&& ...args)
@@ -453,7 +453,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 		return;
 	const auto ticks = ::GetTickCount64();
 	auto dT = ticks - last;
-	if (const auto& [_, period] = intervals[periodId]; dT >= period || forceRun) {
+	if (const auto [_, period] = intervals[periodId]; dT >= period || forceRun) {
 		forceRun = false;
 		// mouse in ANY corner of screen means DON'T run app!
 		if (POINT p; ::GetCursorPos(&p),
@@ -470,7 +470,7 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 		trace("DELETED inactivity timer, STARTING inactivity task...");
 		const auto cmd{ getWindowText(executableH) };
 		const auto checked = ::SendMessage(restrictedH, BM_GETCHECK, 0, 0) == BST_CHECKED;
-		if (DWORD exit = 0; (checked ? runRestrictedProcessAndWait : runProcessAndWait)((char*)cmd.c_str(), exit)) {
+		if (DWORD exit{ 0 }; (checked ? runRestrictedProcessAndWait : runProcessAndWait)((char*)cmd.c_str(), exit)) {
 			trace("INACTIVITY task finished, exit code => ", exit);
 			if (!timer && userPresent && monitorState == Monitor::On)
 				last = ::GetTickCount64(),
@@ -484,9 +484,11 @@ static VOID CALLBACK timerCallback(PVOID w, BOOLEAN timerOrWait)
 			// N.B. - without tracing, there is no indication of failure here!
 			trace("*** FAILURE executing ", cmd);
 	} else {
-		if (LASTINPUTINFO history{ sizeof(LASTINPUTINFO) }; ::GetLastInputInfo(&history) && history.dwTime > last)
+		if (LASTINPUTINFO history{ sizeof(LASTINPUTINFO) };
+			::GetLastInputInfo(&history) && history.dwTime > last)
 			last = decltype(last)(history.dwTime), dT = 1; // max time to display will be 59:59
-		if (WINDOWPLACEMENT wP{ sizeof(WINDOWINFO) }; ::GetWindowPlacement((HWND)w, &wP) && wP.showCmd != SW_SHOWMINIMIZED) {
+		if (WINDOWPLACEMENT wP{ sizeof(WINDOWINFO) };
+			::GetWindowPlacement((HWND)w, &wP) && wP.showCmd != SW_SHOWMINIMIZED) {
 			char buf[16];
 			formatTimeRemaining(buf, std::size(buf), period - dT);
 			::SetWindowText(countdownH, buf);
@@ -786,13 +788,13 @@ static void loadConfig()
 		std::stringstream ls(conf);
 		for (string line; std::getline(ls, line), !ls.eof();)
 			if (line.length() >= 4 && line[3] == '=') {
-				if (line.substr(0, 3) == "cmd")
-					config["cmd"] = line.substr(4);
-				else if (line.substr(0, 3) == "lib")
+				if (auto test{ string_view(line) }; test.substr(0, 3) == "cmd"sv)
+					config["cmd"] = test.substr(4);
+				else if (test.substr(0, 3) == "lib"sv)
 					config["lib"] = parse_old_libs(line.substr(4));
-				else if (line.substr(0, 3) == "del")
+				else if (test.substr(0, 3) == "del"sv)
 					config["del"] = std::stol(line.substr(4));
-				else if (line.substr(0, 3) == "run")
+				else if (test.substr(0, 3) == "run"sv)
 					config["run"] = std::stol(line.substr(4)) != 0;
 			}
 		return config;
@@ -814,7 +816,7 @@ static auto collectCmdsFromUI()
 {
 	set<string> elements;
 	const auto n = ::SendMessage(executableH, CB_GETCOUNT, 0, 0);
-	for (auto i = 0; i < n; i++)
+	for (auto i : std::views::iota(0, n))
 		elements.emplace(getListBoxText(executableH, i));
 	return elements;
 }
@@ -842,7 +844,7 @@ static void saveConfig()
 		configDB["lib"] = js_arr{ uiCmds.cbegin(), uiCmds.cend() };
 		configDB["del"] = periodId;
 		configDB["run"] = restrict;
-		string_to_path(configDB.to_string(), configpath());
+		string_to_path(configDB.to_string(true), configpath());
 	}
 	const auto startup = ::SendMessage(startWithWindowsH, BM_GETCHECK, 0, 0) == BST_CHECKED;
 	IPersistFilePtr ppf;
